@@ -26,8 +26,15 @@ let
         --output "$snapshot_dir/nutrition.sqlite3"
       rdiff-backup --api-version 201 backup \
         --create-full-path "$snapshot_dir" "$repository"
+      retention_status=0
       rdiff-backup --api-version 201 remove increments \
-        --older-than ${lib.escapeShellArg cfg.backup.retention} "$repository"
+        --older-than ${lib.escapeShellArg cfg.backup.retention} "$repository" \
+        || retention_status=$?
+      # rdiff-backup exits 2 when pruning emits a warning, including the
+      # expected first-run case where no increment is old enough to remove.
+      if [[ "$retention_status" -ne 0 && "$retention_status" -ne 2 ]]; then
+        exit "$retention_status"
+      fi
     '';
   };
 in
