@@ -197,8 +197,8 @@ must use the sops-managed key.
 
 Acceptance criteria:
 
-- [ ] The full photo-to-log-to-correction lifecycle works through ChatGPT Web.
-- [ ] Database inspection matches the conversational results and audit history.
+- [x] The full photo-to-log-to-correction lifecycle works through ChatGPT Web.
+- [x] Database inspection matches the conversational results and audit history.
 - [ ] The service is still unreachable directly from the public internet.
 - [ ] Limitations about visual estimates are visible in normal interaction.
 
@@ -253,3 +253,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 6–7 | Pinned the reviewed tunnel-client flake, passed `doctor`, connected the live local tunnel, and documented file-reference-only use of the temporary development key; a ChatGPT tool call remains pending. | `flake.lock`, `docs/local-testing.md`; tunnel-client startup metadata |
 | 2026-08-27 | 7 | Completed ChatGPT connector discovery and the first photo-to-log call through the live tunnel. Read-only inspection confirmed one entry, four estimated components, medium confidence, explicit assumptions, and totals matching the conversation. | Local `nutrition.sqlite3`; redacted MCP and tunnel access logs |
 | 2026-08-27 | 4, 7 | Confirmed ChatGPT revised the original meal to revision 2 and set today's goal. Fixed one-day whole-range summaries omitting the effective goal, added goal-progress regression coverage, and added redacted structured tool outcome logs. | Local database audit rows; repository and observability tests |
+| 2026-08-27 | 7 | Verified a second photo meal and in-conversation correction: the breakfast advanced to revision 2, its original five-component snapshot remained intact, and current provenance spans estimates, user clarification, and a visible nutrition label. Today's two-entry summary correctly reports its resolved interval and goal progress. | Local database audit rows; live MCP summary; redacted tool logs |
