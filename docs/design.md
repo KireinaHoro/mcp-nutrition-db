@@ -28,6 +28,7 @@ from images are estimates and must remain identifiable as such.
 - deriving entry totals from component values;
 - querying individual entries and bounded date ranges;
 - calculating daily and range summaries;
+- storing correctable training sessions and their energy-burn provenance;
 - storing effective-dated nutrition goals;
 - supporting corrections with optimistic concurrency and an audit history;
 - exposing those operations as MCP tools over Streamable HTTP.
@@ -232,6 +233,7 @@ Supported grouping is `day` or `whole_range`. The response contains:
 
 - summed macro values;
 - entry count;
+- training count and summed training burn;
 - values averaged per represented day when requested;
 - completeness counts for each macro;
 - the effective goal and progress for each day when a goal exists.
@@ -240,21 +242,41 @@ Unknown component values must not be silently treated as known zeroes. A total
 may still be returned, but its completeness field states how many included
 entries had known values.
 
-### 5.8 `nutrition_set_goals`
+### 5.8 Training tools
+
+`nutrition_log_training` records a session with `occurred_at`, `activity`,
+`duration_minutes`, `calories_burned_kcal`, timezone, and a required source
+(`estimated`, `wearable`, `fitness_machine`, `app`, `user_provided`, or
+`other`). Exact retries use the same automatic ten-minute suppression as meal
+creates. The complete burn is attributed to the training's local start date.
+
+`nutrition_get_training`, `nutrition_update_training`,
+`nutrition_delete_training`, and `nutrition_list_trainings` provide the same
+revision-safe correction, auditable soft deletion, bounded calendar windows,
+and opaque pagination conventions as nutrition entries.
+
+### 5.9 `nutrition_set_goals`
 
 Creates or replaces a goal version effective on a calendar date. Input includes
-`effective_from`, `timezone`, and at least one macro target. Targets use the same
-public units as nutrition values and must be positive.
+`effective_from`, `timezone`, `base_burn_kcal`, optional `deficit_kcal`, and
+optional non-calorie macro targets. Calories are derived rather than accepted as
+a second independent target:
+
+`calorie_target_kcal = base_burn_kcal + training_burn_kcal - deficit_kcal`
+
+The deficit must be non-negative and lower than the base burn. Training burn is
+the sum of active training records assigned to the requested local date.
 
 Goals are effective-dated, not mutated in place, so historical summaries use
 the goal that applied on that day. Setting the same effective date replaces
 that version in one transaction and records the change.
 
-### 5.9 `nutrition_get_goals`
+### 5.10 `nutrition_get_goals`
 
 With `on_date`, returns the goal version effective on that date. Without it,
-returns the current goal and the ordered goal history. The response distinguishes
-an unset macro target from zero.
+returns the current goal and the ordered goal history. The current goal includes
+the requested day's derived `energy_budget`; summaries use that same budget for
+calorie progress. The response distinguishes an unset macro target from zero.
 
 ## 6. Canonical entry model
 
@@ -346,8 +368,8 @@ simple reliable restoration and audit inspection over a complex per-field diff.
 
 #### `daily_goals`
 
-Effective date, timezone, macro targets, and audit timestamps. The pair
-`(effective_from, timezone)` is unique.
+Effective date, timezone, base burn, deficit, non-calorie macro targets, and
+audit timestamps. The pair `(effective_from, timezone)` is unique.
 
 #### `goal_revisions`
 
@@ -359,6 +381,12 @@ Normalized create-payload digest, resulting entry identifier, and creation time.
 The table provides automatic exact-replay suppression without requiring a token
 from the model. Rows older than the ten-minute retry window may be pruned. A
 forced create records a new entry without consulting this table.
+
+#### `trainings`, `training_revisions`, and `training_create_fingerprints`
+
+Current correctable training records, immutable pre-change audit snapshots, and
+automatic exact-retry suppression. Training duration and burned energy are
+stored as scaled integers; soft-deleted sessions do not affect summaries.
 
 #### `schema_migrations`
 
@@ -379,6 +407,8 @@ limits to reject accidental extreme values.
 - components by `(entry_id, position)`;
 - goals by `(timezone, effective_from)`;
 - create fingerprints by `(request_digest, created_at)`.
+- active trainings by `(occurred_at_utc, training_id)` and training fingerprints
+  by `(request_digest, created_at)`.
 
 ## 8. Errors and observability
 
@@ -551,3 +581,4 @@ parallel.
 | 2026-08-27 | Make relative calendar windows first-class list and summary inputs. | ChatGPT can query `today` without calculating RFC 3339 boundaries. |
 | 2026-08-27 | Replace required caller idempotency keys with short-lived server-side exact-replay detection. | Normal LLM calls are simpler while lost-response retries remain safe. |
 | 2026-08-27 | Require nutrition provenance on every component. | Estimates, labels, restaurant declarations, and other sources remain distinguishable. |
+| 2026-08-27 | Derive calories from base burn plus training burn minus deficit. | Training corrections automatically change the relevant day's intake budget without rewriting goals. |

@@ -1,10 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from pydantic import ValidationError
 
 from mcp_nutrition_db.models import (
     ComponentInput,
+    GoalInput,
     IntervalWindow,
     LogEntryInput,
     NutritionValues,
@@ -48,3 +49,21 @@ def test_entry_rejects_naive_occurrence(meal_payload: dict[str, object]) -> None
     meal_payload["occurred_at"] = "2026-08-27T12:30:00"
     with pytest.raises(ValidationError, match="UTC offset"):
         LogEntryInput.model_validate(meal_payload)
+
+
+def test_goal_calories_are_derived() -> None:
+    with pytest.raises(ValueError, match="derived"):
+        GoalInput(
+            effective_from=date(2026, 8, 27),
+            base_burn_kcal=2200,
+            targets={"calories_kcal": 1800},  # type: ignore[arg-type]
+            reason="Invalid duplicate calorie target",
+        )
+
+    with pytest.raises(ValueError, match="less than"):
+        GoalInput(
+            effective_from=date(2026, 8, 27),
+            base_burn_kcal=400,
+            deficit_kcal=400,
+            reason="Invalid deficit",
+        )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+import sqlite3
+from datetime import date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -8,11 +10,16 @@ from mcp_nutrition_db.models import (
     EntryChanges,
     GoalInput,
     ListEntriesInput,
+    ListTrainingsInput,
+    LogTrainingInput,
     NutritionValues,
     RelativeDayWindow,
     SummarizeInput,
+    TrainingChanges,
+    TrainingSource,
 )
 from mcp_nutrition_db.repository import (
+    MIGRATION_1,
     NotFoundError,
     NutritionRepository,
     RevisionConflictError,
@@ -24,9 +31,36 @@ def today() -> RelativeDayWindow:
 
 
 def test_schema_migration_is_repeatable(repository: NutritionRepository) -> None:
-    assert repository.schema_version() == 1
+    assert repository.schema_version() == 2
     repository.migrate()
-    assert repository.schema_version() == 1
+    assert repository.schema_version() == 2
+
+
+def test_v1_goal_migrates_calorie_target_to_base_burn(tmp_path: Path) -> None:
+    database = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        connection.executescript(MIGRATION_1)
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-08-01T00:00:00Z')"
+        )
+        connection.execute(
+            """
+            INSERT INTO daily_goals(
+                goal_id, effective_from, timezone, calories_mkcal, reason, created_at, updated_at
+            ) VALUES ('legacy', '2026-08-01', 'Europe/Zurich', 2000000, 'Legacy',
+                      '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
+            """
+        )
+
+    migrated = NutritionRepository(database)
+    goal = migrated.get_goals(on_date=date(2026, 8, 27))["current"]
+    assert migrated.schema_version() == 2
+    assert goal["base_burn_kcal"] == 2_000
+    assert goal["targets"]["calories_kcal"] is None
+    assert goal["energy_budget"]["calorie_target_kcal"] == 2_000
 
 
 def test_create_exact_retry_and_force_new(repository: NutritionRepository, meal: object) -> None:
@@ -107,14 +141,16 @@ def test_effective_dated_goals(repository: NutritionRepository) -> None:
     august = repository.set_goals(
         GoalInput(
             effective_from=date(2026, 8, 1),
-            targets=NutritionValues(calories_kcal=2_000, protein_g=120),
+            base_burn_kcal=2_000,
+            targets=NutritionValues(protein_g=120),
             reason="Initial goal",
         )
     )
     september = repository.set_goals(
         GoalInput(
             effective_from=date(2026, 9, 1),
-            targets=NutritionValues(calories_kcal=2_200, protein_g=130),
+            base_burn_kcal=2_200,
+            targets=NutritionValues(protein_g=130),
             reason="Training block",
         )
     )
@@ -129,12 +165,13 @@ def test_effective_dated_goals(repository: NutritionRepository) -> None:
     replacement = repository.set_goals(
         GoalInput(
             effective_from=date(2026, 9, 1),
-            targets=NutritionValues(calories_kcal=2_100),
+            base_burn_kcal=2_100,
+            targets=NutritionValues(protein_g=125),
             reason="Corrected target",
         )
     )
     assert replacement["goal_id"] == september["goal_id"]
-    assert replacement["targets"]["calories_kcal"] == 2_100
+    assert replacement["base_burn_kcal"] == 2_100
     assert len(repository.get_goals(on_date=date(2026, 9, 3))["history"]) == 2
 
 
@@ -145,7 +182,8 @@ def test_daily_summary_includes_effective_goal_progress(
     repository.set_goals(
         GoalInput(
             effective_from=date(2026, 8, 1),
-            targets=NutritionValues(calories_kcal=2_000, protein_g=100),
+            base_burn_kcal=2_000,
+            targets=NutritionValues(protein_g=100),
             reason="Test goal",
         )
     )
@@ -153,7 +191,7 @@ def test_daily_summary_includes_effective_goal_progress(
     summary = repository.summarize(SummarizeInput(window=today(), grouping="day"))
     group = summary["groups"][0]
     assert group["group"] == "2026-08-27"
-    assert group["goal"]["targets"]["calories_kcal"] == 2_000
+    assert group["goal"]["energy_budget"]["calorie_target_kcal"] == 2_000
     assert group["goal_progress"]["calories_kcal"] == {
         "target": 2_000,
         "consumed": 484,
@@ -169,7 +207,8 @@ def test_single_day_whole_range_summary_includes_effective_goal(
     repository.set_goals(
         GoalInput(
             effective_from=date(2026, 8, 1),
-            targets=NutritionValues(calories_kcal=2_000, fat_g=0),
+            base_burn_kcal=2_000,
+            targets=NutritionValues(fat_g=0),
             reason="Test goal",
         )
     )
@@ -177,6 +216,70 @@ def test_single_day_whole_range_summary_includes_effective_goal(
     summary = repository.summarize(SummarizeInput(window=today()))
     group = summary["groups"][0]
     assert group["group"] == "whole_range"
-    assert group["goal"]["targets"]["calories_kcal"] == 2_000
+    assert group["goal"]["energy_budget"]["calorie_target_kcal"] == 2_000
     assert group["goal_progress"]["calories_kcal"]["remaining"] == 1_516
     assert group["goal_progress"]["fat_g"]["fraction"] is None
+
+
+def test_training_crud_and_dynamic_calorie_budget(
+    repository: NutritionRepository, meal: object
+) -> None:
+    repository.create_entry(meal)  # type: ignore[arg-type]
+    repository.set_goals(
+        GoalInput(
+            effective_from=date(2026, 8, 1),
+            base_burn_kcal=2_200,
+            deficit_kcal=400,
+            targets=NutritionValues(protein_g=120),
+            reason="Cutting goal",
+        )
+    )
+    request = LogTrainingInput(
+        occurred_at=datetime.fromisoformat("2026-08-27T18:00:00+02:00"),
+        activity="Cycling",
+        duration_minutes=60,
+        calories_burned_kcal=850,
+        source=TrainingSource(type="user_provided", detail="Cycling computer"),
+    )
+    created = repository.create_training(request)
+    retry = repository.create_training(request)
+    assert retry["training_id"] == created["training_id"]
+    assert retry["deduplicated"] is True
+
+    listed = repository.list_trainings(ListTrainingsInput(window=today()))
+    assert listed["trainings"][0]["activity"] == "Cycling"
+    updated = repository.update_training(
+        created["training_id"],
+        1,
+        "Corrected from cycling computer",
+        TrainingChanges(calories_burned_kcal=900),
+    )
+    assert updated["revision"] == 2
+    assert (
+        repository.training_revision_history(created["training_id"])[0]["snapshot"][
+            "calories_burned_kcal"
+        ]
+        == 850
+    )
+
+    summary = repository.summarize(SummarizeInput(window=today()))
+    group = summary["groups"][0]
+    assert group["training_count"] == 1
+    assert group["training_burn_kcal"] == 900
+    assert group["goal"]["energy_budget"] == {
+        "base_burn_kcal": 2_200,
+        "training_burn_kcal": 900,
+        "deficit_kcal": 400,
+        "calorie_target_kcal": 2_700,
+    }
+    assert group["goal_progress"]["calories_kcal"]["remaining"] == 2_216
+
+    repository.delete_training(created["training_id"], 2, "Training was duplicated")
+    assert repository.training_revision_history(created["training_id"])[-1]["operation"] == "delete"
+    assert repository.list_trainings(ListTrainingsInput(window=today()))["trainings"] == []
+    assert (
+        repository.get_goals(on_date=date(2026, 8, 27))["current"]["energy_budget"][
+            "calorie_target_kcal"
+        ]
+        == 1_800
+    )

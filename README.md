@@ -1,8 +1,9 @@
 # mcp-nutrition-db
 
 `mcp-nutrition-db` is a private MCP service that lets ChatGPT record, correct,
-and query meal nutrition and nutrition goals. ChatGPT interprets meal photos and
-conversation context; this service owns the durable, auditable data.
+and query meal nutrition, training sessions, and nutrition goals. ChatGPT
+interprets meal photos and conversation context; this service owns the durable,
+auditable data and calculates daily energy budgets.
 
 The production service is intended to run on the NixOS host `kage`. It listens
 only on loopback and is reached from ChatGPT through OpenAI Secure MCP Tunnel,
@@ -23,7 +24,7 @@ log before or alongside the code that depends on them.
 
 ## Current status
 
-The local MVP implements the SQLite schema and all eight MCP tools. Repository,
+The local MVP implements the SQLite schema and all thirteen MCP tools. Repository,
 schema, calendar, MCP process, Streamable HTTP, package, and NixOS evaluation
 checks pass; see the implementation plan for the exact verified state.
 

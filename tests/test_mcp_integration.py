@@ -44,7 +44,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert "durable nutrition record" in (initialized.instructions or "")
 
             tools = await session.list_tools()
-            assert len(tools.tools) == 8
+            assert len(tools.tools) == 13
 
             logged = await session.call_tool(
                 "nutrition_log_entry",
@@ -88,5 +88,47 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert listed.isError is False
             assert listed.structuredContent is not None
             assert len(listed.structuredContent["entries"]) == 1
+
+            goal = await session.call_tool(
+                "nutrition_set_goals",
+                {
+                    "effective_from": "2026-08-01",
+                    "base_burn_kcal": 2200,
+                    "deficit_kcal": 400,
+                    "targets": {"protein_g": 120},
+                    "reason": "Test energy budget",
+                },
+            )
+            assert goal.isError is False
+
+            training = await session.call_tool(
+                "nutrition_log_training",
+                {
+                    "occurred_at": "2026-08-27T18:00:00+02:00",
+                    "activity": "Cycling",
+                    "duration_minutes": 60,
+                    "calories_burned_kcal": 850,
+                    "source": {"type": "user_provided", "detail": "Cycling computer"},
+                },
+            )
+            assert training.isError is False
+            assert training.structuredContent is not None
+            assert training.structuredContent["calories_burned_kcal"] == 850
+
+            summary = await session.call_tool(
+                "nutrition_summarize",
+                {
+                    "window": {
+                        "type": "calendar_day",
+                        "date": "2026-08-27",
+                        "timezone": "Europe/Zurich",
+                    }
+                },
+            )
+            assert summary.isError is False
+            assert summary.structuredContent is not None
+            group = summary.structuredContent["groups"][0]
+            assert group["training_burn_kcal"] == 850
+            assert group["goal_progress"]["calories_kcal"]["target"] == 2650
 
     asyncio.run(exercise())

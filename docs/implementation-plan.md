@@ -53,10 +53,14 @@ Acceptance criteria:
 - [x] Implement numbered, transactional SQLite migrations.
 - [x] Create entries, components, entry revisions, goals, goal revisions,
   create fingerprints, and schema migration tables.
+- [x] Add training records, revisions, retry fingerprints, and migration from
+  fixed calorie targets to base-burn energy goals.
 - [x] Enable foreign keys, WAL, busy timeout, and explicit transaction handling.
 - [x] Implement scaled-integer conversion and bounded decimal validation.
 - [x] Implement create/get/list/update/soft-delete repository operations.
 - [x] Implement effective-dated goal set/get operations.
+- [x] Implement revision-safe training create/get/list/update/soft-delete
+  operations and daily burn aggregation.
 - [x] Implement canonical create-payload fingerprints, ten-minute exact-replay
   suppression, and explicit `force_new` behavior.
 - [x] Implement optimistic revision conflicts and immutable audit snapshots.
@@ -82,6 +86,7 @@ Acceptance criteria:
   completeness metadata.
 - [x] Implement `nutrition_set_goals`.
 - [x] Implement `nutrition_get_goals`.
+- [x] Implement the five training tools and derived daily calorie budgets.
 - [x] Add correct read-only, mutating, destructive, and idempotence annotations.
 - [x] Map domain failures to concise, structured agent-usable errors.
 
@@ -180,14 +185,16 @@ must use the sops-managed key.
 
 - [x] Register/connect the OpenAI-hosted tunnel endpoint in ChatGPT developer
   mode for the intended account or workspace.
-- [x] Verify ChatGPT can discover all eight tools with correct descriptions and
-  annotations.
+- [ ] Verify ChatGPT can discover all thirteen tools with correct descriptions
+  and annotations after the training-capable build is deployed.
 - [x] Log a meal from a photo and inspect the stored assumptions and confidence.
 - [x] Clarify a portion and verify the original entry is revised, not duplicated.
 - [x] Query recent entries and a date-range summary.
 - [x] Query today's entries and summary using the relative-day window and verify
   the returned resolved interval.
 - [x] Set goals and verify current and historical goal comparisons.
+- [ ] Set base burn and deficit, log and correct a training session, and verify
+  the daily calorie budget changes by the corrected training burn.
 - [x] Test destructive-tool confirmation and soft deletion.
 - [x] Verify a stale-revision conflict leads ChatGPT to refresh before retrying.
 - [ ] Verify tunnel and service failures produce understandable user-facing
@@ -263,3 +270,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 7 | Completed ChatGPT tests for relative-day and date-range queries, current and historical goals, stale-revision recovery, destructive confirmation, and soft deletion. Stopped the tunnel client for the remaining user-facing failure and recovery test while leaving the loopback backend healthy. | User-confirmed ChatGPT results; local tunnel test session |
 | 2026-08-27 | 7 | Tested tunnel outage and recovery. ChatGPT showed a non-terminating connection message for over five minutes, so understandable failure behavior remains unmet. Restarting the tunnel restored normal calls without restarting the backend; redacted logs confirmed subsequent list/get operations succeeded. | User-observed ChatGPT behavior; tunnel and MCP structured logs |
 | 2026-08-27 | 8 | Added atomic SQLite online snapshots and a backup-enabled NixOS module with weekly, persistent, 26-week rdiff history. A disposable two-generation repository restored two rows and passed `PRAGMA quick_check`. | Backup unit tests; NixOS closure; local rdiff restore rehearsal |
+| 2026-08-27 | 2–4 | Added correctable training sessions and changed calorie accounting to base burn plus daily training burn minus deficit. Migrated a copy of the existing local database and exercised the flow through a real MCP client session. | Schema v2; 22 tests; full flake check; local-copy migration |

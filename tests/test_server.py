@@ -4,7 +4,7 @@ from mcp_nutrition_db.repository import NutritionRepository
 from mcp_nutrition_db.server import create_server
 
 
-def test_server_advertises_eight_tools_with_safe_annotations(
+def test_server_advertises_thirteen_tools_with_safe_annotations(
     repository: NutritionRepository,
 ) -> None:
     server = create_server(repository)
@@ -19,11 +19,18 @@ def test_server_advertises_eight_tools_with_safe_annotations(
         "nutrition_summarize",
         "nutrition_set_goals",
         "nutrition_get_goals",
+        "nutrition_log_training",
+        "nutrition_get_training",
+        "nutrition_update_training",
+        "nutrition_delete_training",
+        "nutrition_list_trainings",
     }
     assert tools["nutrition_get_entry"].annotations.readOnlyHint is True
     assert tools["nutrition_list_entries"].annotations.readOnlyHint is True
     assert tools["nutrition_delete_entry"].annotations.destructiveHint is True
     assert tools["nutrition_log_entry"].annotations.idempotentHint is False
+    assert tools["nutrition_list_trainings"].annotations.readOnlyHint is True
+    assert tools["nutrition_delete_training"].annotations.destructiveHint is True
 
 
 def test_schema_exposes_relative_day_and_component_provenance(

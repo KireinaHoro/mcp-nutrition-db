@@ -19,9 +19,12 @@ from .models import (
     EntryChanges,
     GoalInput,
     ListEntriesInput,
+    ListTrainingsInput,
     LogEntryInput,
+    LogTrainingInput,
     NutritionValues,
     SummarizeInput,
+    TrainingChanges,
     resolve_window,
     validate_timezone,
 )
@@ -36,7 +39,7 @@ NUTRIENTS: dict[str, tuple[str, int]] = {
     "sodium_mg": ("sodium_mg", 1),
 }
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CREATE_RETRY_WINDOW = timedelta(minutes=10)
 
 
@@ -49,9 +52,12 @@ class NotFoundError(RepositoryError):
 
 
 class RevisionConflictError(RepositoryError):
-    def __init__(self, entry_id: str, expected: int, current: int) -> None:
+    def __init__(
+        self, entry_id: str, expected: int, current: int, *, record_type: str = "entry"
+    ) -> None:
         super().__init__(
-            f"revision conflict for entry {entry_id}: expected {expected}, current {current}"
+            f"revision conflict for {record_type} {entry_id}: "
+            f"expected {expected}, current {current}"
         )
         self.entry_id = entry_id
         self.expected = expected
@@ -189,6 +195,51 @@ CREATE INDEX create_fingerprints_digest_idx
     ON create_fingerprints(request_digest, created_at DESC);
 """
 
+MIGRATION_2 = """
+ALTER TABLE daily_goals ADD COLUMN base_burn_mkcal INTEGER;
+ALTER TABLE daily_goals ADD COLUMN deficit_mkcal INTEGER NOT NULL DEFAULT 0;
+UPDATE daily_goals SET base_burn_mkcal = calories_mkcal WHERE base_burn_mkcal IS NULL;
+UPDATE daily_goals SET calories_mkcal = NULL;
+
+CREATE TABLE trainings (
+    training_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    occurred_at TEXT NOT NULL,
+    occurred_at_utc TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    activity TEXT NOT NULL,
+    duration_milliseconds INTEGER NOT NULL CHECK (duration_milliseconds > 0),
+    calories_burned_mkcal INTEGER NOT NULL CHECK (calories_burned_mkcal > 0),
+    source_type TEXT NOT NULL,
+    source_detail TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+);
+
+CREATE TABLE training_revisions (
+    revision_id TEXT PRIMARY KEY,
+    training_id TEXT NOT NULL REFERENCES trainings(training_id),
+    resulting_revision INTEGER NOT NULL,
+    operation TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE training_create_fingerprints (
+    request_digest TEXT NOT NULL,
+    training_id TEXT NOT NULL REFERENCES trainings(training_id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX trainings_active_time_idx
+    ON trainings(occurred_at_utc DESC, training_id DESC) WHERE deleted_at IS NULL;
+CREATE INDEX training_fingerprints_digest_idx
+    ON training_create_fingerprints(request_digest, created_at DESC);
+"""
+
 
 class NutritionRepository:
     def __init__(self, database_path: str | Path, *, clock: Any = _utc_now) -> None:
@@ -226,6 +277,12 @@ class NutritionRepository:
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (1, _timestamp(self.clock())),
+                )
+            if 2 not in versions:
+                connection.executescript(MIGRATION_2)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (2, _timestamp(self.clock())),
                 )
 
     def schema_version(self) -> int:
@@ -510,6 +567,245 @@ class NutritionRepository:
         return {"entry_id": entry_id, "revision": new_revision, "deleted": True}
 
     @staticmethod
+    def _training_digest(request: LogTrainingInput) -> str:
+        payload = request.model_dump(mode="json", exclude={"force_new"})
+        normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(normalized.encode()).hexdigest()
+
+    @staticmethod
+    def _training_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "training_id": row["training_id"],
+            "revision": row["revision"],
+            "occurred_at": row["occurred_at"],
+            "timezone": row["timezone"],
+            "activity": row["activity"],
+            "duration_minutes": _unscale(row["duration_milliseconds"], 60_000),
+            "calories_burned_kcal": _unscale(row["calories_burned_mkcal"], 1_000),
+            "source": {"type": row["source_type"], "detail": row["source_detail"]},
+            "notes": row["notes"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _get_training(
+        self, connection: sqlite3.Connection, training_id: str, *, include_deleted: bool = False
+    ) -> dict[str, Any]:
+        query = "SELECT * FROM trainings WHERE training_id = ?"
+        if not include_deleted:
+            query += " AND deleted_at IS NULL"
+        row = connection.execute(query, (training_id,)).fetchone()
+        if row is None:
+            raise NotFoundError(f"training not found: {training_id}")
+        return self._training_from_row(row)
+
+    def create_training(self, request: LogTrainingInput) -> dict[str, Any]:
+        now = self.clock()
+        now_text = _timestamp(now)
+        digest = self._training_digest(request)
+        cutoff = _timestamp(now - CREATE_RETRY_WINDOW)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "DELETE FROM training_create_fingerprints WHERE created_at < ?", (cutoff,)
+            )
+            if not request.force_new:
+                prior = connection.execute(
+                    """
+                    SELECT f.training_id
+                    FROM training_create_fingerprints AS f
+                    JOIN trainings AS t ON t.training_id = f.training_id
+                    WHERE f.request_digest = ? AND f.created_at >= ?
+                      AND t.deleted_at IS NULL
+                    ORDER BY f.created_at DESC LIMIT 1
+                    """,
+                    (digest, cutoff),
+                ).fetchone()
+                if prior is not None:
+                    training = self._get_training(connection, prior["training_id"])
+                    connection.commit()
+                    return {**training, "deduplicated": True}
+
+            training_id = _new_id()
+            connection.execute(
+                """
+                INSERT INTO trainings(
+                    training_id, revision, occurred_at, occurred_at_utc, timezone,
+                    activity, duration_milliseconds, calories_burned_mkcal,
+                    source_type, source_detail, notes, created_at, updated_at
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    training_id,
+                    request.occurred_at.isoformat(),
+                    _timestamp(request.occurred_at),
+                    request.timezone,
+                    request.activity,
+                    _scale(request.duration_minutes, 60_000),
+                    _scale(request.calories_burned_kcal, 1_000),
+                    request.source.type.value,
+                    request.source.detail,
+                    request.notes,
+                    now_text,
+                    now_text,
+                ),
+            )
+            if not request.force_new:
+                connection.execute(
+                    "INSERT INTO training_create_fingerprints"
+                    "(request_digest, training_id, created_at) VALUES (?, ?, ?)",
+                    (digest, training_id, now_text),
+                )
+            training = self._get_training(connection, training_id)
+            connection.commit()
+            return {**training, "deduplicated": False}
+
+    def get_training(self, training_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            return self._get_training(connection, training_id)
+
+    def update_training(
+        self,
+        training_id: str,
+        expected_revision: int,
+        reason: str,
+        changes: TrainingChanges,
+    ) -> dict[str, Any]:
+        now_text = _timestamp(self.clock())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = self._get_training(connection, training_id)
+            if current["revision"] != expected_revision:
+                raise RevisionConflictError(
+                    training_id,
+                    expected_revision,
+                    current["revision"],
+                    record_type="training",
+                )
+            fields = changes.model_fields_set
+            values: dict[str, Any] = {}
+            if "occurred_at" in fields:
+                assert changes.occurred_at is not None
+                values["occurred_at"] = changes.occurred_at.isoformat()
+                values["occurred_at_utc"] = _timestamp(changes.occurred_at)
+            if "timezone" in fields:
+                assert changes.timezone is not None
+                values["timezone"] = changes.timezone
+            if "activity" in fields:
+                assert changes.activity is not None
+                values["activity"] = changes.activity
+            if "duration_minutes" in fields:
+                assert changes.duration_minutes is not None
+                values["duration_milliseconds"] = _scale(changes.duration_minutes, 60_000)
+            if "calories_burned_kcal" in fields:
+                assert changes.calories_burned_kcal is not None
+                values["calories_burned_mkcal"] = _scale(changes.calories_burned_kcal, 1_000)
+            if "source" in fields:
+                assert changes.source is not None
+                values["source_type"] = changes.source.type.value
+                values["source_detail"] = changes.source.detail
+            if "notes" in fields:
+                values["notes"] = changes.notes
+            new_revision = expected_revision + 1
+            values.update(revision=new_revision, updated_at=now_text)
+            assignments = ", ".join(f"{column} = :{column}" for column in values)
+            connection.execute(
+                f"UPDATE trainings SET {assignments} WHERE training_id = :training_id",
+                {**values, "training_id": training_id},
+            )
+            connection.execute(
+                """
+                INSERT INTO training_revisions(
+                    revision_id, training_id, resulting_revision, operation, reason,
+                    snapshot_json, created_at
+                ) VALUES (?, ?, ?, 'update', ?, ?, ?)
+                """,
+                (
+                    _new_id(),
+                    training_id,
+                    new_revision,
+                    reason,
+                    json.dumps(current, sort_keys=True),
+                    now_text,
+                ),
+            )
+            updated = self._get_training(connection, training_id)
+            connection.commit()
+            return updated
+
+    def delete_training(
+        self, training_id: str, expected_revision: int, reason: str
+    ) -> dict[str, Any]:
+        now_text = _timestamp(self.clock())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = self._get_training(connection, training_id)
+            if current["revision"] != expected_revision:
+                raise RevisionConflictError(
+                    training_id,
+                    expected_revision,
+                    current["revision"],
+                    record_type="training",
+                )
+            new_revision = expected_revision + 1
+            connection.execute(
+                "UPDATE trainings SET revision = ?, updated_at = ?, deleted_at = ? "
+                "WHERE training_id = ?",
+                (new_revision, now_text, now_text, training_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO training_revisions(
+                    revision_id, training_id, resulting_revision, operation, reason,
+                    snapshot_json, created_at
+                ) VALUES (?, ?, ?, 'delete', ?, ?, ?)
+                """,
+                (
+                    _new_id(),
+                    training_id,
+                    new_revision,
+                    reason,
+                    json.dumps(current, sort_keys=True),
+                    now_text,
+                ),
+            )
+            connection.commit()
+        return {"training_id": training_id, "revision": new_revision, "deleted": True}
+
+    def list_trainings(
+        self, request: ListTrainingsInput, *, now: datetime | None = None
+    ) -> dict[str, Any]:
+        resolved = resolve_window(request.window, now=now or self.clock())
+        parameters: list[Any] = [_timestamp(resolved.start), _timestamp(resolved.end)]
+        clauses = [
+            "deleted_at IS NULL",
+            "occurred_at_utc >= ?",
+            "occurred_at_utc < ?",
+        ]
+        if request.cursor is not None:
+            cursor_time, cursor_id = self._decode_cursor(request.cursor)
+            clauses.append("(occurred_at_utc < ? OR (occurred_at_utc = ? AND training_id < ?))")
+            parameters.extend([cursor_time, cursor_time, cursor_id])
+        parameters.append(request.limit + 1)
+        sql = (
+            "SELECT * FROM trainings WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY occurred_at_utc DESC, training_id DESC LIMIT ?"
+        )
+        with self._connect() as connection:
+            rows = connection.execute(sql, parameters).fetchall()
+        has_more = len(rows) > request.limit
+        page = rows[: request.limit]
+        next_cursor = None
+        if has_more and page:
+            next_cursor = self._encode_cursor(page[-1]["occurred_at_utc"], page[-1]["training_id"])
+        return {
+            "trainings": [self._training_from_row(row) for row in page],
+            "next_cursor": next_cursor,
+            "resolved_window": resolved.model_dump(mode="json"),
+        }
+
+    @staticmethod
     def _encode_cursor(occurred_at_utc: str, entry_id: str) -> str:
         raw = json.dumps([occurred_at_utc, entry_id], separators=(",", ":")).encode()
         return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -578,9 +874,19 @@ class NutritionRepository:
                 (_timestamp(resolved.start), _timestamp(resolved.end)),
             ).fetchall()
             entries = [self._get_entry(connection, row["entry_id"]) for row in rows]
+            training_rows = connection.execute(
+                """
+                SELECT * FROM trainings
+                WHERE deleted_at IS NULL AND occurred_at_utc >= ? AND occurred_at_utc < ?
+                ORDER BY occurred_at_utc
+                """,
+                (_timestamp(resolved.start), _timestamp(resolved.end)),
+            ).fetchall()
+            trainings = [self._training_from_row(row) for row in training_rows]
 
         zone = ZoneInfo(resolved.timezone)
         groups: dict[str, list[dict[str, Any]]] = {}
+        training_groups: dict[str, list[dict[str, Any]]] = {}
         for entry in entries:
             key = "whole_range"
             if request.grouping == "day":
@@ -593,6 +899,17 @@ class NutritionRepository:
                     .isoformat()
                 )
             groups.setdefault(key, []).append(entry)
+        for training in trainings:
+            key = "whole_range"
+            if request.grouping == "day":
+                key = (
+                    datetime.fromisoformat(training["occurred_at"])
+                    .astimezone(zone)
+                    .date()
+                    .isoformat()
+                )
+            training_groups.setdefault(key, []).append(training)
+            groups.setdefault(key, [])
         if not groups and request.grouping == "whole_range":
             groups["whole_range"] = []
 
@@ -608,6 +925,10 @@ class NutritionRepository:
             ):
                 whole_range_goal_date = local_start.date()
         for key, group_entries in groups.items():
+            group_trainings = training_groups.get(key, [])
+            training_burn = round(
+                sum(training["calories_burned_kcal"] for training in group_trainings), 3
+            )
             values: dict[str, float | None] = {}
             completeness: dict[str, dict[str, int | bool]] = {}
             for nutrient in NUTRIENTS:
@@ -649,10 +970,29 @@ class NutritionRepository:
                                 else round(consumed / target, 6)
                             ),
                         }
+                    if goal["energy_budget"] is not None:
+                        calorie_target = goal["energy_budget"]["calorie_target_kcal"]
+                        calorie_consumed = values["calories_kcal"]
+                        goal_progress["calories_kcal"] = {
+                            "target": calorie_target,
+                            "consumed": calorie_consumed,
+                            "remaining": (
+                                None
+                                if calorie_consumed is None
+                                else round(calorie_target - calorie_consumed, 3)
+                            ),
+                            "fraction": (
+                                None
+                                if calorie_consumed is None or calorie_target == 0
+                                else round(calorie_consumed / calorie_target, 6)
+                            ),
+                        }
             summaries.append(
                 {
                     "group": key,
                     "entry_count": len(group_entries),
+                    "training_count": len(group_trainings),
+                    "training_burn_kcal": training_burn,
                     "totals": values,
                     "completeness": completeness,
                     "goal": goal,
@@ -672,6 +1012,8 @@ class NutritionRepository:
             "effective_from": row["effective_from"],
             "timezone": row["timezone"],
             "targets": _nutrient_public_values(row),
+            "base_burn_kcal": _unscale(row["base_burn_mkcal"], 1_000),
+            "deficit_kcal": _unscale(row["deficit_mkcal"], 1_000),
             "reason": row["reason"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -679,7 +1021,14 @@ class NutritionRepository:
 
     def set_goals(self, request: GoalInput) -> dict[str, Any]:
         now_text = _timestamp(self.clock())
-        nutrients = _nutrient_db_values(request.targets)
+        nutrients = (
+            {column: None for column, _factor in NUTRIENTS.values()}
+            if request.targets is None
+            else _nutrient_db_values(request.targets)
+        )
+        nutrients["calories_mkcal"] = None
+        base_burn_mkcal = _scale(request.base_burn_kcal, 1_000)
+        deficit_mkcal = _scale(request.deficit_kcal, 1_000)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -693,11 +1042,13 @@ class NutritionRepository:
                     INSERT INTO daily_goals(
                         goal_id, effective_from, timezone, calories_mkcal,
                         protein_mg, carbohydrate_mg, fat_mg, fiber_mg, sugar_mg,
-                        sodium_mg, reason, created_at, updated_at
+                        sodium_mg, base_burn_mkcal, deficit_mkcal,
+                        reason, created_at, updated_at
                     ) VALUES (
                         :goal_id, :effective_from, :timezone, :calories_mkcal,
                         :protein_mg, :carbohydrate_mg, :fat_mg, :fiber_mg,
-                        :sugar_mg, :sodium_mg, :reason, :created_at, :updated_at
+                        :sugar_mg, :sodium_mg, :base_burn_mkcal, :deficit_mkcal,
+                        :reason, :created_at, :updated_at
                     )
                     """,
                     {
@@ -707,6 +1058,8 @@ class NutritionRepository:
                         "reason": request.reason,
                         "created_at": now_text,
                         "updated_at": now_text,
+                        "base_burn_mkcal": base_burn_mkcal,
+                        "deficit_mkcal": deficit_mkcal,
                         **nutrients,
                     },
                 )
@@ -736,6 +1089,8 @@ class NutritionRepository:
                         fiber_mg = :fiber_mg,
                         sugar_mg = :sugar_mg,
                         sodium_mg = :sodium_mg,
+                        base_burn_mkcal = :base_burn_mkcal,
+                        deficit_mkcal = :deficit_mkcal,
                         reason = :reason,
                         updated_at = :updated_at
                     WHERE goal_id = :goal_id
@@ -744,6 +1099,8 @@ class NutritionRepository:
                         "goal_id": goal_id,
                         "reason": request.reason,
                         "updated_at": now_text,
+                        "base_burn_mkcal": base_burn_mkcal,
+                        "deficit_mkcal": deficit_mkcal,
                         **nutrients,
                     },
                 )
@@ -753,7 +1110,37 @@ class NutritionRepository:
             assert row is not None
             result = self._goal_from_row(row)
             connection.commit()
+            result["energy_budget"] = self._energy_budget(result, request.effective_from)
             return result
+
+    def _training_burn_for_day(self, on_date: date, timezone: str) -> float:
+        zone = ZoneInfo(timezone)
+        start = datetime.combine(on_date, time.min, tzinfo=zone).astimezone(UTC)
+        end = datetime.combine(on_date + timedelta(days=1), time.min, tzinfo=zone).astimezone(UTC)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COALESCE(SUM(calories_burned_mkcal), 0) AS total
+                FROM trainings
+                WHERE deleted_at IS NULL AND occurred_at_utc >= ? AND occurred_at_utc < ?
+                """,
+                (_timestamp(start), _timestamp(end)),
+            ).fetchone()
+        assert row is not None
+        return _unscale(row["total"], 1_000) or 0.0
+
+    def _energy_budget(self, goal: dict[str, Any], on_date: date) -> dict[str, float] | None:
+        base_burn = goal["base_burn_kcal"]
+        if base_burn is None:
+            return None
+        deficit = goal["deficit_kcal"]
+        training_burn = self._training_burn_for_day(on_date, goal["timezone"])
+        return {
+            "base_burn_kcal": base_burn,
+            "training_burn_kcal": training_burn,
+            "deficit_kcal": deficit,
+            "calorie_target_kcal": round(base_burn + training_burn - deficit, 3),
+        }
 
     def get_goals(
         self,
@@ -779,10 +1166,13 @@ class NutritionRepository:
                     "SELECT * FROM daily_goals WHERE timezone = ? ORDER BY effective_from DESC",
                     (timezone,),
                 ).fetchall()
+        current_goal = None if current is None else self._goal_from_row(current)
+        if current_goal is not None:
+            current_goal["energy_budget"] = self._energy_budget(current_goal, effective_date)
         return {
             "on_date": effective_date.isoformat(),
             "timezone": timezone,
-            "current": None if current is None else self._goal_from_row(current),
+            "current": current_goal,
             "history": [self._goal_from_row(row) for row in history_rows],
         }
 
@@ -795,6 +1185,27 @@ class NutritionRepository:
                 FROM entry_revisions WHERE entry_id = ? ORDER BY resulting_revision
                 """,
                 (entry_id,),
+            ).fetchall()
+        return [
+            {
+                "resulting_revision": row["resulting_revision"],
+                "operation": row["operation"],
+                "reason": row["reason"],
+                "snapshot": json.loads(row["snapshot_json"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def training_revision_history(self, training_id: str) -> list[dict[str, Any]]:
+        """Internal helper used by tests and future operator tooling."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT resulting_revision, operation, reason, snapshot_json, created_at
+                FROM training_revisions WHERE training_id = ? ORDER BY resulting_revision
+                """,
+                (training_id,),
             ).fetchall()
         return [
             {

@@ -20,9 +20,13 @@ from .models import (
     Estimation,
     GoalInput,
     ListEntriesInput,
+    ListTrainingsInput,
+    LogTrainingInput,
     NutritionValues,
     QueryWindow,
     SummarizeInput,
+    TrainingChanges,
+    TrainingSource,
     validate_timezone,
 )
 from .observability import logged_tool_call
@@ -35,8 +39,9 @@ INSTRUCTIONS = """Use these tools as the durable nutrition record. ChatGPT inter
 photos and conversation; this server validates and stores the resulting structured estimates.
 Use nutrition_log_entry once for a new meal, then nutrition_update_entry when the user corrects
 portions or ingredients. Preserve per-component source provenance and uncertainty. For requests
-about today, pass a relative_day window instead of calculating timestamps. Nutrition estimates
-are not medical advice."""
+about today, pass a relative_day window instead of calculating timestamps. Log exercise with
+nutrition_log_training; its burn increases that day's calorie target. Nutrition and exercise
+estimates are not medical advice."""
 
 READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
@@ -218,6 +223,120 @@ def create_server(
                 raise _translate_error(error) from error
 
     @server.tool(
+        name="nutrition_log_training",
+        description=(
+            "Log one training session and its estimated energy burn. Include the estimate source; "
+            "the burn is credited to the local calendar day on which training started. Exact "
+            "retries within ten minutes return the original training."
+        ),
+        annotations=MUTATING,
+    )
+    def nutrition_log_training(
+        occurred_at: datetime,
+        activity: Annotated[str, Field(min_length=1, max_length=200)],
+        duration_minutes: Annotated[float, Field(gt=0, le=10_080)],
+        calories_burned_kcal: Annotated[float, Field(gt=0, le=100_000)],
+        source: TrainingSource,
+        ctx: MCPContext,  # type: ignore[type-arg]
+        timezone: str = default_timezone,
+        notes: Annotated[str | None, Field(max_length=5_000)] = None,
+        force_new: bool = False,
+    ) -> dict[str, Any]:
+        with logged_tool_call("nutrition_log_training", ctx):
+            try:
+                return repository.create_training(
+                    LogTrainingInput(
+                        occurred_at=occurred_at,
+                        activity=activity,
+                        duration_minutes=duration_minutes,
+                        calories_burned_kcal=calories_burned_kcal,
+                        source=source,
+                        timezone=timezone,
+                        notes=notes,
+                        force_new=force_new,
+                    )
+                )
+            except Exception as error:
+                raise _translate_error(error) from error
+
+    @server.tool(
+        name="nutrition_get_training",
+        description="Fetch one complete active training by its training_id.",
+        annotations=READ_ONLY,
+    )
+    def nutrition_get_training(
+        training_id: str,
+        ctx: MCPContext,  # type: ignore[type-arg]
+    ) -> dict[str, Any]:
+        with logged_tool_call("nutrition_get_training", ctx):
+            try:
+                return repository.get_training(training_id)
+            except Exception as error:
+                raise _translate_error(error) from error
+
+    @server.tool(
+        name="nutrition_update_training",
+        description=(
+            "Correct a training's activity, timing, duration, burn estimate, or source. Supply "
+            "the last observed revision to avoid overwriting a newer correction."
+        ),
+        annotations=MUTATING,
+    )
+    def nutrition_update_training(
+        training_id: str,
+        expected_revision: Annotated[int, Field(ge=1)],
+        reason: Annotated[str, Field(min_length=1, max_length=500)],
+        changes: TrainingChanges,
+        ctx: MCPContext,  # type: ignore[type-arg]
+    ) -> dict[str, Any]:
+        with logged_tool_call("nutrition_update_training", ctx):
+            try:
+                return repository.update_training(training_id, expected_revision, reason, changes)
+            except Exception as error:
+                raise _translate_error(error) from error
+
+    @server.tool(
+        name="nutrition_delete_training",
+        description="Soft-delete one training. Requires its last observed revision and a reason.",
+        annotations=DESTRUCTIVE,
+    )
+    def nutrition_delete_training(
+        training_id: str,
+        expected_revision: Annotated[int, Field(ge=1)],
+        reason: Annotated[str, Field(min_length=1, max_length=500)],
+        ctx: MCPContext,  # type: ignore[type-arg]
+    ) -> dict[str, Any]:
+        with logged_tool_call("nutrition_delete_training", ctx):
+            try:
+                return repository.delete_training(training_id, expected_revision, reason)
+            except Exception as error:
+                raise _translate_error(error) from error
+
+    @server.tool(
+        name="nutrition_list_trainings",
+        description=(
+            "List training sessions in a bounded window. For today, use "
+            '{"type":"relative_day","day":"today"}; resolved boundaries are returned.'
+        ),
+        annotations=READ_ONLY,
+    )
+    def nutrition_list_trainings(
+        window: QueryWindow,
+        ctx: MCPContext,  # type: ignore[type-arg]
+        cursor: str | None = None,
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> dict[str, Any]:
+        with logged_tool_call("nutrition_list_trainings", ctx):
+            try:
+                return repository.list_trainings(
+                    ListTrainingsInput(
+                        window=window_with_default(window), cursor=cursor, limit=limit
+                    )
+                )
+            except Exception as error:
+                raise _translate_error(error) from error
+
+    @server.tool(
         name="nutrition_summarize",
         description=(
             "Sum nutrition over a bounded window, grouped by day or whole range. For today's "
@@ -241,16 +360,18 @@ def create_server(
     @server.tool(
         name="nutrition_set_goals",
         description=(
-            "Set or replace an effective-dated calorie or macro goal version. Historical dates "
-            "continue using the goal version effective on that day."
+            "Set an effective-dated base daily burn, calorie deficit, and optional macro targets. "
+            "The daily calorie target is base burn plus logged training burn minus deficit."
         ),
         annotations=MUTATING,
     )
     def nutrition_set_goals(
         effective_from: date,
-        targets: NutritionValues,
+        base_burn_kcal: Annotated[float, Field(gt=0, le=100_000)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
         ctx: MCPContext,  # type: ignore[type-arg]
+        deficit_kcal: Annotated[float, Field(ge=0, le=100_000)] = 0,
+        targets: NutritionValues | None = None,
         timezone: str = default_timezone,
     ) -> dict[str, Any]:
         with logged_tool_call("nutrition_set_goals", ctx):
@@ -259,6 +380,8 @@ def create_server(
                     GoalInput(
                         effective_from=effective_from,
                         timezone=timezone,
+                        base_burn_kcal=base_burn_kcal,
+                        deficit_kcal=deficit_kcal,
                         targets=targets,
                         reason=reason,
                     )

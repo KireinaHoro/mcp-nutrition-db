@@ -41,6 +41,15 @@ class SourceType(StrEnum):
     OTHER = "other"
 
 
+class TrainingSourceType(StrEnum):
+    ESTIMATED = "estimated"
+    WEARABLE = "wearable"
+    FITNESS_MACHINE = "fitness_machine"
+    APP = "app"
+    USER_PROVIDED = "user_provided"
+    OTHER = "other"
+
+
 class NutritionValues(StrictModel):
     calories_kcal: float | None = Field(default=None, ge=0, le=100_000)
     protein_g: float | None = Field(default=None, ge=0, le=10_000)
@@ -221,6 +230,57 @@ class ListEntriesInput(StrictModel):
     limit: int = Field(default=50, ge=1, le=100)
 
 
+class TrainingSource(StrictModel):
+    type: TrainingSourceType
+    detail: str | None = Field(default=None, max_length=500)
+
+
+class LogTrainingInput(StrictModel):
+    occurred_at: datetime
+    activity: str = Field(min_length=1, max_length=200)
+    duration_minutes: float = Field(gt=0, le=10_080)
+    calories_burned_kcal: float = Field(gt=0, le=100_000)
+    source: TrainingSource
+    timezone: str = DEFAULT_TIMEZONE
+    notes: str | None = Field(default=None, max_length=5_000)
+    force_new: bool = False
+
+    _aware_occurred_at = field_validator("occurred_at")(validate_aware_datetime)
+    _valid_timezone = field_validator("timezone")(validate_timezone)
+
+
+class TrainingChanges(StrictModel):
+    occurred_at: datetime | None = None
+    timezone: str | None = None
+    activity: str | None = Field(default=None, min_length=1, max_length=200)
+    duration_minutes: float | None = Field(default=None, gt=0, le=10_080)
+    calories_burned_kcal: float | None = Field(default=None, gt=0, le=100_000)
+    source: TrainingSource | None = None
+    notes: str | None = Field(default=None, max_length=5_000)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def aware_if_set(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else validate_aware_datetime(value)
+
+    @field_validator("timezone")
+    @classmethod
+    def timezone_if_set(cls, value: str | None) -> str | None:
+        return None if value is None else validate_timezone(value)
+
+    @model_validator(mode="after")
+    def require_change(self) -> TrainingChanges:
+        if not self.model_fields_set:
+            raise ValueError("at least one changed field is required")
+        return self
+
+
+class ListTrainingsInput(StrictModel):
+    window: QueryWindow
+    cursor: str | None = None
+    limit: int = Field(default=50, ge=1, le=100)
+
+
 class SummarizeInput(StrictModel):
     window: QueryWindow
     grouping: Literal["day", "whole_range"] = "whole_range"
@@ -229,7 +289,19 @@ class SummarizeInput(StrictModel):
 class GoalInput(StrictModel):
     effective_from: date
     timezone: str = DEFAULT_TIMEZONE
-    targets: NutritionValues
+    base_burn_kcal: float = Field(gt=0, le=100_000)
+    deficit_kcal: float = Field(default=0, ge=0, le=100_000)
+    targets: NutritionValues | None = None
     reason: str = Field(min_length=1, max_length=500)
 
     _valid_timezone = field_validator("timezone")(validate_timezone)
+
+    @model_validator(mode="after")
+    def calories_are_derived(self) -> GoalInput:
+        if self.targets is not None and self.targets.calories_kcal is not None:
+            raise ValueError(
+                "targets.calories_kcal is derived; set base_burn_kcal and deficit_kcal instead"
+            )
+        if self.deficit_kcal >= self.base_burn_kcal:
+            raise ValueError("deficit_kcal must be less than base_burn_kcal")
+        return self
