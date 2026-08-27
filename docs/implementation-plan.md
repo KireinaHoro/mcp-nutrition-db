@@ -210,8 +210,8 @@ Acceptance criteria:
 
 ## Phase 8 — operations and first release
 
-- [ ] Add an online backup command or service/timer.
-- [ ] Perform and document a restore rehearsal using a temporary directory.
+- [x] Add an online backup command and reusable incremental backup service/timer.
+- [x] Perform and document a restore rehearsal using a temporary directory.
 - [ ] Write an operator runbook for status, logs, migrations, backup, restore,
   credential rotation, and tunnel reconnection.
 - [ ] Document data export and permanent deletion procedures.
@@ -222,7 +222,7 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- [ ] A backup has been restored and queried successfully.
+- [x] A backup has been restored and queried successfully.
 - [ ] API-key rotation is tested without rebuilding secret material into Nix.
 - [ ] The temporary development key is revoked and absent from release inputs.
 - [ ] The runbook is sufficient to diagnose the service while preserving data.
@@ -262,3 +262,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 7 | Verified a second photo meal and in-conversation correction: the breakfast advanced to revision 2, its original five-component snapshot remained intact, and current provenance spans estimates, user clarification, and a visible nutrition label. Today's two-entry summary correctly reports its resolved interval and goal progress. | Local database audit rows; live MCP summary; redacted tool logs |
 | 2026-08-27 | 7 | Completed ChatGPT tests for relative-day and date-range queries, current and historical goals, stale-revision recovery, destructive confirmation, and soft deletion. Stopped the tunnel client for the remaining user-facing failure and recovery test while leaving the loopback backend healthy. | User-confirmed ChatGPT results; local tunnel test session |
 | 2026-08-27 | 7 | Tested tunnel outage and recovery. ChatGPT showed a non-terminating connection message for over five minutes, so understandable failure behavior remains unmet. Restarting the tunnel restored normal calls without restarting the backend; redacted logs confirmed subsequent list/get operations succeeded. | User-observed ChatGPT behavior; tunnel and MCP structured logs |
+| 2026-08-27 | 8 | Added atomic SQLite online snapshots and a backup-enabled NixOS module with weekly, persistent, 26-week rdiff history. A disposable two-generation repository restored two rows and passed `PRAGMA quick_check`. | Backup unit tests; NixOS closure; local rdiff restore rehearsal |

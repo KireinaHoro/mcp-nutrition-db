@@ -45,6 +45,14 @@ Run a loopback development server with disposable state:
 nix run . -- serve --database /tmp/mcp-nutrition-db.sqlite3
 ```
 
+Create an atomic SQLite online snapshot without stopping the server:
+
+```console
+nix run . -- backup \
+  --database /tmp/mcp-nutrition-db.sqlite3 \
+  --output /tmp/mcp-nutrition-db.backup.sqlite3
+```
+
 The MCP endpoint is `http://127.0.0.1:8787/mcp`; readiness is available at
 `http://127.0.0.1:8787/healthz`. The server refuses a non-loopback HTTP bind by
 default. See [local testing](docs/local-testing.md) to attach a new Codex session

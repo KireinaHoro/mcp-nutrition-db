@@ -8,6 +8,7 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from .backup import backup_database
 from .models import DEFAULT_TIMEZONE
 from .observability import configure_logging
 from .repository import NutritionRepository
@@ -57,12 +58,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--database",
         default=os.environ.get("MCP_NUTRITION_DB_PATH", "./nutrition.sqlite3"),
     )
+
+    backup = subparsers.add_parser(
+        "backup", help="create an atomic, integrity-checked SQLite online backup"
+    )
+    backup.add_argument("--database", required=True, help="source SQLite database path")
+    backup.add_argument("--output", required=True, help="destination snapshot path")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     database = Path(args.database).expanduser()
+
+    if args.command == "backup":
+        destination = backup_database(database, Path(args.output))
+        print(f"backup verified: {destination}")
+        return 0
+
     repository = NutritionRepository(database)
 
     if args.command == "migrate":

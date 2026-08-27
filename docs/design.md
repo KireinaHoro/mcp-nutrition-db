@@ -502,13 +502,18 @@ parallel.
 
 ## 12. Backup and recovery
 
-- Create backups with SQLite's online backup mechanism, never by copying a live
-  database file without its WAL state.
-- Include the state directory in the existing host backup workflow after a
-  verified online snapshot is produced.
-- Retain multiple generations according to the host's backup policy.
-- Document and test a restore into a temporary state directory before the first
-  production release.
+- Create backups with the application's `backup` command, which uses SQLite's
+  online backup API, runs `PRAGMA quick_check`, and atomically publishes a
+  mode-0600 snapshot. Never copy a live database file without its WAL state.
+- When enabled, the NixOS module stores the latest verified snapshot and an
+  `rdiff-backup` repository under `/var/backup/mcp-nutrition-db`. The persistent
+  weekly timer retains 26 weeks of incremental history by default.
+- The backup service runs locally with no network access and root-only storage;
+  production may additionally replicate this directory off-host later.
+- Restore the latest generation with `rdiff-backup --api-version 201 restore
+  /var/backup/mcp-nutrition-db/increments <temporary-directory>`, run
+  `PRAGMA quick_check` against the restored database, and only replace service
+  state while the nutrition service and tunnel are stopped.
 - A restore replaces state only while the service and tunnel client are stopped,
   after preserving the current database as a recoverable file.
 

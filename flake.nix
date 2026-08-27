@@ -68,6 +68,7 @@
                   fsType = "tmpfs";
                 };
                 services.mcp-nutrition-db.enable = true;
+                services.mcp-nutrition-db.backup.enable = true;
                 system.stateVersion = "25.05";
               }
             ];
