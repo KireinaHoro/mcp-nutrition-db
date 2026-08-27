@@ -178,11 +178,11 @@ must use the sops-managed key.
 
 ## Phase 7 — end-to-end ChatGPT validation
 
-- [ ] Register/connect the OpenAI-hosted tunnel endpoint in ChatGPT developer
+- [x] Register/connect the OpenAI-hosted tunnel endpoint in ChatGPT developer
   mode for the intended account or workspace.
-- [ ] Verify ChatGPT can discover all eight tools with correct descriptions and
+- [x] Verify ChatGPT can discover all eight tools with correct descriptions and
   annotations.
-- [ ] Log a meal from a photo and inspect the stored assumptions and confidence.
+- [x] Log a meal from a photo and inspect the stored assumptions and confidence.
 - [ ] Clarify a portion and verify the original entry is revised, not duplicated.
 - [ ] Query recent entries and a date-range summary.
 - [ ] Query today's entries and summary using the relative-day window and verify
@@ -251,3 +251,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 1–4 | Implemented the first local MVP: pinned Python environment, SQLite schema/repository, all eight MCP tools, readiness, and 14 passing tests including an MCP process session. | `src/`, `tests/`, `flake.nix`; Streamable HTTP and Nix closure checks remain pending |
 | 2026-08-27 | 1, 4–5 | Verified all eight tools through Streamable HTTP, passed the full flake check and NixOS closure build, and documented direct Codex attachment. | `nix flake check --print-build-logs`; local MCP lifecycle test; `.codex/config.toml` |
 | 2026-08-27 | 6–7 | Pinned the reviewed tunnel-client flake, passed `doctor`, connected the live local tunnel, and documented file-reference-only use of the temporary development key; a ChatGPT tool call remains pending. | `flake.lock`, `docs/local-testing.md`; tunnel-client startup metadata |
+| 2026-08-27 | 7 | Completed ChatGPT connector discovery and the first photo-to-log call through the live tunnel. Read-only inspection confirmed one entry, four estimated components, medium confidence, explicit assumptions, and totals matching the conversation. | Local `nutrition.sqlite3`; redacted MCP and tunnel access logs |
