@@ -1,5 +1,6 @@
 # Ephemeral local credential for Secure MCP Tunnel development only.
 /api-key
+/.tunnel-client/
 
 # Local runtime state and common development artifacts.
 /.direnv/

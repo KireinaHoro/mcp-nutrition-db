@@ -14,7 +14,13 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
 
     async def exercise() -> None:
         environment = dict(os.environ)
-        environment["PYTHONPATH"] = str(Path.cwd() / "src")
+        source_path = str(Path.cwd() / "src")
+        inherited_python_path = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            source_path
+            if not inherited_python_path
+            else f"{source_path}{os.pathsep}{inherited_python_path}"
+        )
         parameters = StdioServerParameters(
             command=sys.executable,
             args=[

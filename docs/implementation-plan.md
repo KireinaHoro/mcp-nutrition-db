@@ -2,7 +2,7 @@
 
 - Status: Active
 - Last updated: 2026-08-27
-- Current phase: Phase 1 — application foundation
+- Current phase: Phase 2–4 — repository and runtime hardening
 
 This document is the project progress tracker. Update task checkboxes and the
 progress log in the same commit as completed work. A phase is complete only when
@@ -42,11 +42,11 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- [ ] `nix flake check` passes from a clean checkout.
-- [ ] `nix run . -- --help` succeeds.
-- [ ] The development server can complete MCP initialization and list a
+- [x] `nix flake check` passes from a clean checkout.
+- [x] `nix run . -- --help` succeeds.
+- [x] The development server can complete MCP initialization and list a
   placeholder or initial tool through Streamable HTTP.
-- [ ] No runtime dependency is fetched outside the Nix build closure.
+- [x] No runtime dependency is fetched outside the Nix build closure.
 
 ## Phase 2 — schema and repository
 
@@ -127,18 +127,18 @@ Acceptance criteria:
 
 ## Phase 5 — application NixOS module
 
-- [ ] Export `nixosModules.default` from this flake.
-- [ ] Define documented module options for package, listener, timezone, and
+- [x] Export `nixosModules.default` from this flake.
+- [x] Define documented module options for package, listener, timezone, and
   state directory.
-- [ ] Create a hardened systemd service with persistent state ownership.
-- [ ] Ensure service startup waits for successful migrations.
-- [ ] Add a NixOS evaluation or VM test for the module.
-- [ ] Document local module use and state paths.
+- [x] Create a hardened systemd service with persistent state ownership.
+- [x] Ensure service startup waits for successful migrations.
+- [x] Add a NixOS evaluation or VM test for the module.
+- [x] Document local module use and state paths.
 
 Acceptance criteria:
 
-- [ ] A minimal NixOS configuration importing the module evaluates and builds.
-- [ ] The unit binds only to `127.0.0.1:8787` under its defaults.
+- [x] A minimal NixOS configuration importing the module evaluates and builds.
+- [x] The unit binds only to `127.0.0.1:8787` under its defaults.
 - [ ] The service can write only its intended state directory under systemd
   hardening.
 - [ ] Restarting or upgrading preserves and migrates existing data.
@@ -249,3 +249,5 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 0 | Materialized the accepted design and implementation plan. | `README.md`, `docs/design.md`, `docs/implementation-plan.md` |
 | 2026-08-27 | 0 | Incorporated review feedback on relative-day queries, server-side retry deduplication, and per-component nutrition provenance. | Design decision log and Phases 2, 3, and 7 |
 | 2026-08-27 | 1–4 | Implemented the first local MVP: pinned Python environment, SQLite schema/repository, all eight MCP tools, readiness, and 14 passing tests including an MCP process session. | `src/`, `tests/`, `flake.nix`; Streamable HTTP and Nix closure checks remain pending |
+| 2026-08-27 | 1, 4–5 | Verified all eight tools through Streamable HTTP, passed the full flake check and NixOS closure build, and documented direct Codex attachment. | `nix flake check --print-build-logs`; local MCP lifecycle test; `.codex/config.toml` |
+| 2026-08-27 | 6–7 | Pinned the reviewed tunnel-client flake, passed `doctor`, connected the live local tunnel, and documented file-reference-only use of the temporary development key; a ChatGPT tool call remains pending. | `flake.lock`, `docs/local-testing.md`; tunnel-client startup metadata |

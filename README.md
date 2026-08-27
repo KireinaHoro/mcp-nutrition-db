@@ -14,6 +14,8 @@ so it does not require an nginx route or a public MCP endpoint.
   model, security model, and NixOS deployment.
 - [Implementation plan](docs/implementation-plan.md) is the source of truth for
   phases, acceptance criteria, progress, and deferred work.
+- [Local testing](docs/local-testing.md) explains direct Codex attachment and
+  the temporary Secure MCP Tunnel workflow for ChatGPT Web.
 
 The implementation plan should be updated in the same commit as meaningful
 implementation milestones. Design changes should be recorded in the decision
@@ -22,9 +24,8 @@ log before or alongside the code that depends on them.
 ## Current status
 
 The local MVP implements the SQLite schema and all eight MCP tools. Repository,
-schema, calendar, and MCP stdio integration tests pass. Streamable HTTP and Nix
-closure validation are the next checkpoints; see the implementation plan for
-the exact verified state.
+schema, calendar, MCP process, Streamable HTTP, package, and NixOS evaluation
+checks pass; see the implementation plan for the exact verified state.
 
 ## Development
 
@@ -46,4 +47,5 @@ nix run . -- serve --database /tmp/mcp-nutrition-db.sqlite3
 
 The MCP endpoint is `http://127.0.0.1:8787/mcp`; readiness is available at
 `http://127.0.0.1:8787/healthz`. The server refuses a non-loopback HTTP bind by
-default.
+default. See [local testing](docs/local-testing.md) to attach a new Codex session
+or run the pinned tunnel client for ChatGPT Web.

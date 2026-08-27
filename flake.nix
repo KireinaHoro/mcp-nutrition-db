@@ -2,8 +2,12 @@
   description = "Private MCP service for a conversational nutrition log";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.openai-secure-tunnel-nix = {
+    url = "github:nakasyou/openai-secure-tunnel-nix";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, openai-secure-tunnel-nix }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -22,7 +26,7 @@
           dependencies = with python.pkgs; [ mcp pydantic ];
 
           nativeCheckInputs = with python.pkgs; [ pytestCheckHook ];
-          pytestFlagsArray = [ "tests" ];
+          pytestFlags = [ "tests" ];
           pythonImportsCheck = [ "mcp_nutrition_db" ];
 
           meta = {
@@ -36,12 +40,14 @@
     {
       packages = forAllSystems (system: {
         default = packageFor system;
+        tunnel-client = openai-secure-tunnel-nix.packages.${system}.tunnel-client;
       });
 
       apps = forAllSystems (system: {
         default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/mcp-nutrition-db";
+          meta.description = "Run the nutrition MCP server";
         };
       });
 
@@ -78,6 +84,7 @@
             packages = [
               (python.withPackages (ps: with ps; [ mcp pydantic pytest mypy ruff ]))
               pkgs.sqlite
+              openai-secure-tunnel-nix.packages.${system}.tunnel-client
             ];
           };
         });
