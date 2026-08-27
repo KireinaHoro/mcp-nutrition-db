@@ -31,14 +31,14 @@ Acceptance criteria:
 
 ## Phase 1 — application foundation
 
-- [ ] Add `flake.nix` and `flake.lock` with package, app, dev shell, and check
+- [x] Add `flake.nix` and `flake.lock` with package, app, dev shell, and check
   outputs for supported Linux systems.
-- [ ] Create the Python package layout and a minimal executable entry point.
-- [ ] Lock the official MCP SDK, Pydantic, and test dependencies.
-- [ ] Add formatting, linting, type-checking, and pytest configuration.
-- [ ] Add a minimal MCP server with a loopback-safe configurable bind address.
-- [ ] Add repository contribution commands to the README.
-- [ ] Add CI that runs the same checks exported by the flake.
+- [x] Create the Python package layout and a minimal executable entry point.
+- [x] Lock the official MCP SDK, Pydantic, and test dependencies.
+- [x] Add formatting, linting, type-checking, and pytest configuration.
+- [x] Add a minimal MCP server with a loopback-safe configurable bind address.
+- [x] Add repository contribution commands to the README.
+- [x] Add CI that runs the same checks exported by the flake.
 
 Acceptance criteria:
 
@@ -50,22 +50,22 @@ Acceptance criteria:
 
 ## Phase 2 — schema and repository
 
-- [ ] Implement numbered, transactional SQLite migrations.
-- [ ] Create entries, components, entry revisions, goals, goal revisions,
+- [x] Implement numbered, transactional SQLite migrations.
+- [x] Create entries, components, entry revisions, goals, goal revisions,
   create fingerprints, and schema migration tables.
-- [ ] Enable foreign keys, WAL, busy timeout, and explicit transaction handling.
-- [ ] Implement scaled-integer conversion and bounded decimal validation.
-- [ ] Implement create/get/list/update/soft-delete repository operations.
-- [ ] Implement effective-dated goal set/get operations.
-- [ ] Implement canonical create-payload fingerprints, ten-minute exact-replay
+- [x] Enable foreign keys, WAL, busy timeout, and explicit transaction handling.
+- [x] Implement scaled-integer conversion and bounded decimal validation.
+- [x] Implement create/get/list/update/soft-delete repository operations.
+- [x] Implement effective-dated goal set/get operations.
+- [x] Implement canonical create-payload fingerprints, ten-minute exact-replay
   suppression, and explicit `force_new` behavior.
-- [ ] Implement optimistic revision conflicts and immutable audit snapshots.
+- [x] Implement optimistic revision conflicts and immutable audit snapshots.
 - [ ] Add indexes and verify representative query plans.
 
 Acceptance criteria:
 
-- [ ] A new database migrates from zero to the current schema automatically.
-- [ ] Reapplying migrations is safe.
+- [x] A new database migrates from zero to the current schema automatically.
+- [x] Reapplying migrations is safe.
 - [ ] Repository tests cover success, rollback, retry, conflict, deletion, and
   constraint behavior.
 - [ ] A failed multi-table write leaves no partial state.
@@ -73,43 +73,43 @@ Acceptance criteria:
 
 ## Phase 3 — MCP tool contracts
 
-- [ ] Implement `nutrition_log_entry`.
-- [ ] Implement `nutrition_get_entry`.
-- [ ] Implement `nutrition_update_entry`.
-- [ ] Implement `nutrition_delete_entry`.
-- [ ] Implement `nutrition_list_entries` with bounded cursor pagination.
-- [ ] Implement `nutrition_summarize` with timezone-aware grouping and
+- [x] Implement `nutrition_log_entry`.
+- [x] Implement `nutrition_get_entry`.
+- [x] Implement `nutrition_update_entry`.
+- [x] Implement `nutrition_delete_entry`.
+- [x] Implement `nutrition_list_entries` with bounded cursor pagination.
+- [x] Implement `nutrition_summarize` with timezone-aware grouping and
   completeness metadata.
-- [ ] Implement `nutrition_set_goals`.
-- [ ] Implement `nutrition_get_goals`.
-- [ ] Add correct read-only, mutating, destructive, and idempotence annotations.
-- [ ] Map domain failures to concise, structured agent-usable errors.
+- [x] Implement `nutrition_set_goals`.
+- [x] Implement `nutrition_get_goals`.
+- [x] Add correct read-only, mutating, destructive, and idempotence annotations.
+- [x] Map domain failures to concise, structured agent-usable errors.
 
 Acceptance criteria:
 
 - [ ] Generated input schemas reject unknown fields and invalid units, dates,
   enum values, non-finite values, negatives, and excessive ranges.
-- [ ] Component schemas require valid nutrition provenance and preserve source
+- [x] Component schemas require valid nutrition provenance and preserve source
   details through create, update, get, and revision snapshots.
 - [ ] Every tool has contract tests for success and expected failures.
-- [ ] Retrying an identical create within ten minutes returns the original entry
+- [x] Retrying an identical create within ten minutes returns the original entry
   without requiring the caller to reproduce a token.
-- [ ] `force_new` can deliberately create an otherwise identical entry.
-- [ ] A stale update cannot overwrite a newer correction.
-- [ ] Entry totals always equal server aggregation of current components.
-- [ ] List and summary accept `today` and return their resolved interval without
+- [x] `force_new` can deliberately create an otherwise identical entry.
+- [x] A stale update cannot overwrite a newer correction.
+- [x] Entry totals always equal server aggregation of current components.
+- [x] List and summary accept `today` and return their resolved interval without
   caller-side timestamp calculation.
-- [ ] Relative-day queries behave correctly across Europe/Zurich
+- [x] Relative-day queries behave correctly across Europe/Zurich
   daylight-saving changes using an injected test clock.
 
 ## Phase 4 — production runtime
 
 - [ ] Add configuration for database path, bind address, port, default timezone,
   log level, and query limits.
-- [ ] Refuse non-loopback binding by default and require an explicit unsafe
+- [x] Refuse non-loopback binding by default and require an explicit unsafe
   override for any broader address.
-- [ ] Add startup migration and database readiness checks.
-- [ ] Add loopback health/readiness endpoints or SDK-supported equivalents.
+- [x] Add startup migration and database readiness checks.
+- [x] Add loopback health/readiness endpoints or SDK-supported equivalents.
 - [ ] Add structured journald-friendly logging with correlation IDs and content
   redaction.
 - [ ] Handle SIGTERM and drain in-flight requests within systemd stop timeout.
@@ -248,3 +248,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | --- | --- | --- | --- |
 | 2026-08-27 | 0 | Materialized the accepted design and implementation plan. | `README.md`, `docs/design.md`, `docs/implementation-plan.md` |
 | 2026-08-27 | 0 | Incorporated review feedback on relative-day queries, server-side retry deduplication, and per-component nutrition provenance. | Design decision log and Phases 2, 3, and 7 |
+| 2026-08-27 | 1–4 | Implemented the first local MVP: pinned Python environment, SQLite schema/repository, all eight MCP tools, readiness, and 14 passing tests including an MCP process session. | `src/`, `tests/`, `flake.nix`; Streamable HTTP and Nix closure checks remain pending |

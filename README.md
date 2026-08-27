@@ -21,5 +21,29 @@ log before or alongside the code that depends on them.
 
 ## Current status
 
-Design accepted; implementation has not started. Phase 1 in the implementation
-plan is next.
+The local MVP implements the SQLite schema and all eight MCP tools. Repository,
+schema, calendar, and MCP stdio integration tests pass. Streamable HTTP and Nix
+closure validation are the next checkpoints; see the implementation plan for
+the exact verified state.
+
+## Development
+
+Enter the pinned environment and run the checks:
+
+```console
+nix develop
+PYTHONPATH=src ruff format --check src tests
+PYTHONPATH=src ruff check src tests
+PYTHONPATH=src mypy src
+PYTHONPATH=src pytest
+```
+
+Run a loopback development server with disposable state:
+
+```console
+nix run . -- serve --database /tmp/mcp-nutrition-db.sqlite3
+```
+
+The MCP endpoint is `http://127.0.0.1:8787/mcp`; readiness is available at
+`http://127.0.0.1:8787/healthz`. The server refuses a non-loopback HTTP bind by
+default.
