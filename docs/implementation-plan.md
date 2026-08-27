@@ -153,29 +153,29 @@ Acceptance criteria:
 Work in the sibling `flakes` repository and reference its commit in this
 project's progress log.
 
-- [ ] Add this repository as a locked flake input following the deployment
+- [x] Add this repository as a locked flake input following the deployment
   repository's `nixpkgs`.
-- [ ] Add and lock `github:nakasyou/openai-secure-tunnel-nix`.
-- [ ] Import both NixOS modules in `nixos/kage/default.nix`.
-- [ ] Enable `services.mcp-nutrition-db` on loopback.
-- [ ] Configure the nutrition tunnel instance with the revealed tunnel ID.
-- [ ] Pass `mcp-nutrition-db-tunnel-apikey` only through its sops secret file.
-- [ ] Order the tunnel client after and require the nutrition service.
-- [ ] Keep the nginx virtual host unchanged; add no MCP location.
-- [ ] Include online SQLite snapshots in the host backup workflow.
-- [ ] Build the complete `kage` system closure before deployment.
-- [ ] Deploy and inspect both units, loopback listeners, and redacted logs.
+- [x] Add and lock `github:nakasyou/openai-secure-tunnel-nix`.
+- [x] Import both NixOS modules in `nixos/kage/default.nix`.
+- [x] Enable `services.mcp-nutrition-db` on loopback.
+- [x] Configure the nutrition tunnel instance with the revealed tunnel ID.
+- [x] Pass `mcp-nutrition-db-tunnel-apikey` only through its sops secret file.
+- [x] Order the tunnel client after and require the nutrition service.
+- [x] Keep the nginx virtual host unchanged; add no MCP location.
+- [x] Include online SQLite snapshots in the host backup workflow.
+- [x] Build the complete `kage` system closure before deployment.
+- [x] Deploy and inspect both units, loopback listeners, and redacted logs.
 
 Acceptance criteria:
 
-- [ ] The Nix store and evaluated unit definitions contain neither the API key
+- [x] The Nix store and evaluated unit definitions contain neither the API key
   nor decrypted secret material.
-- [ ] No new public port or nginx path exposes the MCP service.
-- [ ] `mcp-nutrition-db` is healthy before `tunnel-client-nutrition` handles
+- [x] No new public port or nginx path exposes the MCP service.
+- [x] `mcp-nutrition-db` is healthy before `tunnel-client-nutrition` handles
   requests.
-- [ ] A tunnel client restart reconnects without restarting or corrupting the
+- [x] A tunnel client restart reconnects without restarting or corrupting the
   application database.
-- [ ] The pinned third-party tunnel package builds in the `kage` closure.
+- [x] The pinned third-party tunnel package builds in the `kage` closure.
 
 Local pre-deployment tunnel testing may use the gitignored `./api-key`. This is
 an ephemeral development credential only; CI must not require it and production
@@ -185,7 +185,7 @@ must use the sops-managed key.
 
 - [x] Register/connect the OpenAI-hosted tunnel endpoint in ChatGPT developer
   mode for the intended account or workspace.
-- [ ] Verify ChatGPT can discover all thirteen tools with correct descriptions
+- [x] Verify ChatGPT can discover all thirteen tools with correct descriptions
   and annotations after the training-capable build is deployed.
 - [x] Log a meal from a photo and inspect the stored assumptions and confidence.
 - [x] Clarify a portion and verify the original entry is revised, not duplicated.
@@ -193,7 +193,7 @@ must use the sops-managed key.
 - [x] Query today's entries and summary using the relative-day window and verify
   the returned resolved interval.
 - [x] Set goals and verify current and historical goal comparisons.
-- [ ] Set base burn and deficit, log and correct a training session, and verify
+- [x] Set base burn and deficit, log and correct a training session, and verify
   the daily calorie budget changes by the corrected training burn.
 - [x] Test destructive-tool confirmation and soft deletion.
 - [x] Verify a stale-revision conflict leads ChatGPT to refresh before retrying.
@@ -212,7 +212,7 @@ Acceptance criteria:
 
 - [x] The full photo-to-log-to-correction lifecycle works through ChatGPT Web.
 - [x] Database inspection matches the conversational results and audit history.
-- [ ] The service is still unreachable directly from the public internet.
+- [x] The service is still unreachable directly from the public internet.
 - [ ] Limitations about visual estimates are visible in normal interaction.
 
 ## Phase 8 — operations and first release
@@ -271,3 +271,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 7 | Tested tunnel outage and recovery. ChatGPT showed a non-terminating connection message for over five minutes, so understandable failure behavior remains unmet. Restarting the tunnel restored normal calls without restarting the backend; redacted logs confirmed subsequent list/get operations succeeded. | User-observed ChatGPT behavior; tunnel and MCP structured logs |
 | 2026-08-27 | 8 | Added atomic SQLite online snapshots and a backup-enabled NixOS module with weekly, persistent, 26-week rdiff history. A disposable two-generation repository restored two rows and passed `PRAGMA quick_check`. | Backup unit tests; NixOS closure; local rdiff restore rehearsal |
 | 2026-08-27 | 2–4 | Added correctable training sessions and changed calorie accounting to base burn plus daily training burn minus deficit. Migrated a copy of the existing local database and exercised the flow through a real MCP client session. | Schema v2; 22 tests; full flake check; local-copy migration |
+| 2026-08-27 | 6–8 | Deployed the schema-v2 service and Secure MCP Tunnel client on `kage`, sharing the deployment repository's nixpkgs. Verified loopback-only listeners, sops-backed systemd credentials, healthy redacted logs, the persistent weekly timer, two successful incremental backup runs, repository verification, and a restored SQLite `quick_check`. The first live rehearsal also fixed missing `procps` runtime wiring and nonfatal empty-retention handling. | App commits `3541b43`, `d377874`; flakes commits `9cf2827`, `05c8836`, `cd51374`; production systemd, health, rdiff verify/restore evidence |
