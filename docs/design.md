@@ -126,13 +126,37 @@ distinction by reporting both values and data-completeness metadata.
 Inputs use RFC 3339 timestamps with an explicit offset. The service stores the
 instant in UTC plus the supplied IANA timezone for calendar grouping. If the
 caller omits a timezone, `Europe/Zurich` is used. The service must not inherit
-`kage`'s host timezone (`Asia/Tokyo`). Date-range queries use half-open
-intervals: `start <= occurred_at < end`.
+`kage`'s host timezone (`Asia/Tokyo`).
+
+List and summary tools accept a `window` discriminated union so the caller does
+not need to calculate calendar boundaries:
+
+```json
+{ "type": "relative_day", "day": "today", "timezone": "Europe/Zurich" }
+```
+
+Supported window forms are:
+
+- `relative_day`: `day` is `today` or `yesterday`;
+- `calendar_day`: `date` is an ISO 8601 calendar date;
+- `interval`: explicit RFC 3339 `start` and `end` timestamps.
+
+The timezone defaults to `Europe/Zurich`. The service resolves relative days at
+the start of the request using its clock and the requested timezone, including
+daylight-saving transitions. Every list and summary response includes the
+resolved half-open interval so the agent can explain exactly what was queried.
+Explicit intervals use `start <= occurred_at < end`. The application clock must
+be injectable in tests.
 
 #### Mutation safety
 
-- Create calls accept an `idempotency_key`; replaying the same key and payload
-  returns the original result.
+- Create calls do not require the model to generate or reproduce an idempotency
+  token. The service hashes the normalized create payload and suppresses exact
+  replays within a ten-minute retry window, returning the original entry with
+  `deduplicated: true`.
+- `force_new: true` bypasses automatic replay suppression for the unusual case
+  where two deliberately distinct entries have identical payloads and
+  occurrence timestamps.
 - Updates and deletes require `expected_revision`.
 - A stale revision fails with a structured conflict response containing the
   current revision, rather than silently overwriting newer information.
@@ -144,20 +168,22 @@ Creates a meal or snack.
 
 Required input:
 
-- `idempotency_key`: caller-generated opaque string;
 - `occurred_at`: RFC 3339 timestamp;
 - `kind`: `breakfast`, `lunch`, `dinner`, `snack`, or `other`;
 - `title`: concise human-readable description;
-- `components`: one or more complete component estimates.
+- `components`: one or more complete components, each with nutrition
+  provenance.
 
 Optional input:
 
 - `timezone`: IANA timezone, default `Europe/Zurich`;
 - `notes`: facts supplied by the user;
 - `estimation`: confidence, assumptions, and source description.
+- `force_new`: bypass exact-payload retry suppression, default `false`.
 
 Output returns the canonical entry, including its generated `entry_id`,
-`revision = 1`, server-derived totals, and completeness metadata.
+`revision = 1`, server-derived totals, completeness metadata, and whether the
+request was deduplicated.
 
 ### 5.3 `nutrition_get_entry`
 
@@ -187,18 +213,22 @@ should not claim idempotence except where the actual contract guarantees it.
 
 ### 5.6 `nutrition_list_entries`
 
-Returns entries within a required bounded time window. Optional filters are
-`kind`; pagination uses an opaque cursor and a constrained `limit`. Results are
-ordered by `occurred_at` descending, then `entry_id` descending for stable
-pagination.
+Returns entries within a required bounded `window`. A caller can query today's
+entries with `{"type":"relative_day","day":"today"}` and no timestamp
+calculation. Optional filters are `kind`; pagination uses an opaque cursor and a
+constrained `limit`. Results are ordered by `occurred_at` descending, then
+`entry_id` descending for stable pagination.
 
 List results include entry totals and concise metadata but may omit components.
-The caller uses `nutrition_get_entry` when it needs full detail.
+The caller uses `nutrition_get_entry` when it needs full detail. The response
+also returns `resolved_window` with explicit timestamps and timezone.
 
 ### 5.7 `nutrition_summarize`
 
-Aggregates a bounded time window in a requested timezone. Supported grouping is
-`day` or `whole_range`. The response contains:
+Aggregates a bounded `window` using the same relative-day, calendar-day, or
+explicit-interval input as `nutrition_list_entries`. Thus "today's macros" is a
+direct server-side calendar query rather than an LLM-computed RFC 3339 range.
+Supported grouping is `day` or `whole_range`. The response contains:
 
 - summed macro values;
 - entry count;
@@ -244,6 +274,10 @@ an unset macro target from zero.
       "quantity": 180,
       "unit": "g",
       "portion_notes": "Amount confirmed by user",
+      "source": {
+        "type": "estimated",
+        "detail": "Estimated from the meal photo and corrected portion"
+      },
       "nutrition": {
         "calories_kcal": 234,
         "protein_g": 4.3,
@@ -269,9 +303,20 @@ an unset macro target from zero.
 
 `totals` and `completeness` are output-only and calculated by the server.
 Components may describe individual foods or, when detail is unavailable, one
-aggregate component for the whole meal. Stable UUIDv7-style identifiers are
-preferred for entries and components because they are unique and time-sortable;
-the exact library choice is an implementation detail covered by tests.
+aggregate component for the whole meal.
+
+Every component has a required `source` describing the provenance of its
+nutrition values. `source.type` is one of `estimated`, `nutrition_label`,
+`restaurant_declared`, `database`, `user_provided`, `mixed`, or `other`.
+`source.detail` is optional but should identify useful context such as the
+product label, restaurant/menu item, database name, or estimation method. When
+different macro values have different origins, use `mixed` and explain the
+breakdown in `detail`. Provenance describes the nutrition figures; portion
+certainty remains in `portion_notes` and entry-level estimation metadata.
+
+Stable UUIDv7-style identifiers are preferred for entries and components
+because they are unique and time-sortable; the exact library choice is an
+implementation detail covered by tests.
 
 ## 7. Database design
 
@@ -290,7 +335,8 @@ soft-deletion timestamp.
 #### `entry_components`
 
 Current ordered component list. It references `entries` with a foreign key and
-stores quantity, unit, portion notes, and optional nutrition values.
+stores quantity, unit, portion notes, required nutrition-source type, optional
+source detail, and optional nutrition values.
 
 #### `entry_revisions`
 
@@ -307,12 +353,12 @@ Effective date, timezone, macro targets, and audit timestamps. The pair
 
 Immutable snapshots of replaced goal versions with reason and timestamp.
 
-#### `idempotency_keys`
+#### `create_fingerprints`
 
-Key, operation, normalized request digest, stored response identifier, and
-creation time. Reuse with a different payload is an error. Old rows may be
-pruned only after a documented retention period; the first release retains
-them indefinitely because volume is negligible.
+Normalized create-payload digest, resulting entry identifier, and creation time.
+The table provides automatic exact-replay suppression without requiring a token
+from the model. Rows older than the ten-minute retry window may be pruned. A
+forced create records a new entry without consulting this table.
 
 #### `schema_migrations`
 
@@ -332,7 +378,7 @@ limits to reject accidental extreme values.
 - entries by `(kind, occurred_at_utc)`;
 - components by `(entry_id, position)`;
 - goals by `(timezone, effective_from)`;
-- unique idempotency key.
+- create fingerprints by `(request_digest, created_at)`.
 
 ## 8. Errors and observability
 
@@ -341,7 +387,6 @@ Expected failures return concise structured errors suitable for an agent:
 - validation error with field locations;
 - entry or goal not found;
 - revision conflict with current revision;
-- idempotency-key payload mismatch;
 - invalid or excessive query window;
 - internal database error with a correlation ID but no sensitive details.
 
@@ -468,14 +513,15 @@ parallel.
 
 ## 13. Testing strategy
 
-- Model tests cover units, boundaries, unknown values, timestamps, and invalid
-  inputs.
-- Repository tests cover migrations, transactions, idempotency, optimistic
-  concurrency, soft deletion, effective-dated goals, and audit snapshots.
+- Model tests cover units, boundaries, unknown values, timestamps, component
+  provenance, and invalid inputs.
+- Repository tests cover migrations, transactions, retry deduplication,
+  optimistic concurrency, soft deletion, effective-dated goals, and audit
+  snapshots.
 - Tool tests assert MCP schemas, annotations, success output, and agent-usable
   errors.
 - Summary tests cover timezone boundaries, daylight-saving transitions,
-  completeness, and goal selection.
+  relative-day resolution, completeness, and goal selection.
 - Integration tests start the Streamable HTTP server and exercise it with an MCP
   client.
 - Nix checks build the package and evaluate a minimal NixOS configuration.
@@ -492,7 +538,10 @@ parallel.
 | 2026-08-27 | ChatGPT performs image interpretation; the service accepts structured estimates. | No image storage or vision dependency is needed. |
 | 2026-08-27 | Use SQLite with scaled integer values. | Simple operations and exact aggregation; one active writer deployment is assumed. |
 | 2026-08-27 | Use complete component-list replacement for entry corrections. | Updates are easy for an agent to reason about and audit. |
-| 2026-08-27 | Use revisions, idempotency keys, and immutable snapshots. | Retries and conversational corrections do not silently corrupt records. |
+| 2026-08-27 | Use revisions, retry fingerprints, and immutable snapshots. | Retries and conversational corrections do not silently corrupt records. |
 | 2026-08-27 | Use OpenAI Secure MCP Tunnel instead of nginx and a secret URL. | No public listener is needed; use is private/developer-mode only. |
 | 2026-08-27 | Keep tunnel lifecycle in the deployment repo, separate from the application module. | The application flake remains reusable and does not own OpenAI credentials. |
 | 2026-08-27 | Default calendar behavior to `Europe/Zurich`. | Results match the user's intended day rather than the server's Tokyo timezone. |
+| 2026-08-27 | Make relative calendar windows first-class list and summary inputs. | ChatGPT can query `today` without calculating RFC 3339 boundaries. |
+| 2026-08-27 | Replace required caller idempotency keys with short-lived server-side exact-replay detection. | Normal LLM calls are simpler while lost-response retries remain safe. |
+| 2026-08-27 | Require nutrition provenance on every component. | Estimates, labels, restaurant declarations, and other sources remain distinguishable. |

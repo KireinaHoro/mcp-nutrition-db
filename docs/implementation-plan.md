@@ -52,12 +52,13 @@ Acceptance criteria:
 
 - [ ] Implement numbered, transactional SQLite migrations.
 - [ ] Create entries, components, entry revisions, goals, goal revisions,
-  idempotency keys, and schema migration tables.
+  create fingerprints, and schema migration tables.
 - [ ] Enable foreign keys, WAL, busy timeout, and explicit transaction handling.
 - [ ] Implement scaled-integer conversion and bounded decimal validation.
 - [ ] Implement create/get/list/update/soft-delete repository operations.
 - [ ] Implement effective-dated goal set/get operations.
-- [ ] Implement idempotency-key digest and replay behavior.
+- [ ] Implement canonical create-payload fingerprints, ten-minute exact-replay
+  suppression, and explicit `force_new` behavior.
 - [ ] Implement optimistic revision conflicts and immutable audit snapshots.
 - [ ] Add indexes and verify representative query plans.
 
@@ -88,11 +89,18 @@ Acceptance criteria:
 
 - [ ] Generated input schemas reject unknown fields and invalid units, dates,
   enum values, non-finite values, negatives, and excessive ranges.
+- [ ] Component schemas require valid nutrition provenance and preserve source
+  details through create, update, get, and revision snapshots.
 - [ ] Every tool has contract tests for success and expected failures.
-- [ ] Retrying a create with the same idempotency key cannot duplicate a meal.
+- [ ] Retrying an identical create within ten minutes returns the original entry
+  without requiring the caller to reproduce a token.
+- [ ] `force_new` can deliberately create an otherwise identical entry.
 - [ ] A stale update cannot overwrite a newer correction.
 - [ ] Entry totals always equal server aggregation of current components.
-- [ ] Summaries behave correctly across Europe/Zurich daylight-saving changes.
+- [ ] List and summary accept `today` and return their resolved interval without
+  caller-side timestamp calculation.
+- [ ] Relative-day queries behave correctly across Europe/Zurich
+  daylight-saving changes using an injected test clock.
 
 ## Phase 4 — production runtime
 
@@ -177,6 +185,8 @@ must use the sops-managed key.
 - [ ] Log a meal from a photo and inspect the stored assumptions and confidence.
 - [ ] Clarify a portion and verify the original entry is revised, not duplicated.
 - [ ] Query recent entries and a date-range summary.
+- [ ] Query today's entries and summary using the relative-day window and verify
+  the returned resolved interval.
 - [ ] Set goals and verify current and historical goal comparisons.
 - [ ] Test destructive-tool confirmation and soft deletion.
 - [ ] Verify a stale-revision conflict leads ChatGPT to refresh before retrying.
@@ -237,3 +247,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | Date | Phase | Change | Evidence / reference |
 | --- | --- | --- | --- |
 | 2026-08-27 | 0 | Materialized the accepted design and implementation plan. | `README.md`, `docs/design.md`, `docs/implementation-plan.md` |
+| 2026-08-27 | 0 | Incorporated review feedback on relative-day queries, server-side retry deduplication, and per-component nutrition provenance. | Design decision log and Phases 2, 3, and 7 |
