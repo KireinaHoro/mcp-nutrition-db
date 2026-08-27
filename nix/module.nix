@@ -15,7 +15,7 @@ let
   };
   backupScript = pkgs.writeShellApplication {
     name = "mcp-nutrition-db-incremental-backup";
-    runtimeInputs = [ cfg.package pkgs.coreutils pkgs.rdiff-backup ];
+    runtimeInputs = [ cfg.package pkgs.coreutils pkgs.procps pkgs.rdiff-backup ];
     text = ''
       snapshot_dir=${lib.escapeShellArg "${cfg.backup.directory}/snapshot"}
       repository=${lib.escapeShellArg "${cfg.backup.directory}/increments"}
