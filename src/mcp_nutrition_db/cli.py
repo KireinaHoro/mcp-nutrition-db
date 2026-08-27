@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .models import DEFAULT_TIMEZONE
+from .observability import configure_logging
 from .repository import NutritionRepository
 from .server import create_server
 
@@ -38,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8787)
     serve.add_argument("--timezone", default=DEFAULT_TIMEZONE)
     serve.add_argument(
+        "--log-level",
+        choices=("debug", "info", "warning", "error"),
+        default=os.environ.get("MCP_NUTRITION_LOG_LEVEL", "info"),
+    )
+    serve.add_argument(
         "--transport", choices=("streamable-http", "stdio"), default="streamable-http"
     )
     serve.add_argument(
@@ -63,6 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"schema version {repository.schema_version()}")
         return 0
 
+    configure_logging(args.log_level)
+
     if (
         args.transport == "streamable-http"
         and not args.allow_non_loopback
@@ -78,7 +86,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         port=args.port,
         default_timezone=args.timezone,
     )
-    server.run(transport=args.transport)
+    try:
+        server.run(transport=args.transport)
+    except KeyboardInterrupt:
+        # FastMCP completes its application shutdown before propagating Ctrl-C.
+        # Treat that completed operator shutdown as a clean exit.
+        return 0
     return 0
 
 

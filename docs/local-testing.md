@@ -19,6 +19,11 @@ This creates the ignored `nutrition.sqlite3` database and listens only at
 curl --fail http://127.0.0.1:8787/healthz
 ```
 
+Successful and failed tool calls emit one JSON record containing only the tool
+name, outcome, duration, MCP request ID, generated correlation ID, and error
+class when applicable. Arguments, results, meal notes, and credentials are not
+logged. Use `--log-level` to change the default `info` threshold.
+
 The committed `.codex/config.toml` registers that endpoint as the optional
 `nutrition` MCP server and asks for approval only for writes. Codex reads MCP
 configuration when a client session starts, so open a new Codex session from

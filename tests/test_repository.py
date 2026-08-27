@@ -160,3 +160,23 @@ def test_daily_summary_includes_effective_goal_progress(
         "remaining": 1_516,
         "fraction": 0.242,
     }
+
+
+def test_single_day_whole_range_summary_includes_effective_goal(
+    repository: NutritionRepository, meal: object
+) -> None:
+    repository.create_entry(meal)  # type: ignore[arg-type]
+    repository.set_goals(
+        GoalInput(
+            effective_from=date(2026, 8, 1),
+            targets=NutritionValues(calories_kcal=2_000, fat_g=0),
+            reason="Test goal",
+        )
+    )
+
+    summary = repository.summarize(SummarizeInput(window=today()))
+    group = summary["groups"][0]
+    assert group["group"] == "whole_range"
+    assert group["goal"]["targets"]["calories_kcal"] == 2_000
+    assert group["goal_progress"]["calories_kcal"]["remaining"] == 1_516
+    assert group["goal_progress"]["fat_g"]["fraction"] is None

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -25,7 +25,11 @@ from .models import (
     SummarizeInput,
     validate_timezone,
 )
+from .observability import logged_tool_call
 from .repository import NutritionRepository, RepositoryError
+
+# The SDK detects only the unparameterized runtime class for context injection.
+MCPContext = Context
 
 INSTRUCTIONS = """Use these tools as the durable nutrition record. ChatGPT interprets meal
 photos and conversation; this server validates and stores the resulting structured estimates.
@@ -106,39 +110,45 @@ def create_server(
         kind: EntryKind,
         title: Annotated[str, Field(min_length=1, max_length=300)],
         components: Annotated[list[ComponentInput], Field(min_length=1, max_length=100)],
+        ctx: MCPContext,  # type: ignore[type-arg]
         timezone: str = default_timezone,
         notes: Annotated[str | None, Field(max_length=5_000)] = None,
         estimation: Estimation | None = None,
         force_new: bool = False,
     ) -> dict[str, Any]:
-        try:
-            from .models import LogEntryInput
+        with logged_tool_call("nutrition_log_entry", ctx):
+            try:
+                from .models import LogEntryInput
 
-            return repository.create_entry(
-                LogEntryInput(
-                    occurred_at=occurred_at,
-                    kind=kind,
-                    title=title,
-                    components=components,
-                    timezone=timezone,
-                    notes=notes,
-                    estimation=estimation,
-                    force_new=force_new,
+                return repository.create_entry(
+                    LogEntryInput(
+                        occurred_at=occurred_at,
+                        kind=kind,
+                        title=title,
+                        components=components,
+                        timezone=timezone,
+                        notes=notes,
+                        estimation=estimation,
+                        force_new=force_new,
+                    )
                 )
-            )
-        except Exception as error:
-            raise _translate_error(error) from error
+            except Exception as error:
+                raise _translate_error(error) from error
 
     @server.tool(
         name="nutrition_get_entry",
         description="Fetch one complete active nutrition entry by its entry_id.",
         annotations=READ_ONLY,
     )
-    def nutrition_get_entry(entry_id: str) -> dict[str, Any]:
-        try:
-            return repository.get_entry(entry_id)
-        except Exception as error:
-            raise _translate_error(error) from error
+    def nutrition_get_entry(
+        entry_id: str,
+        ctx: MCPContext,  # type: ignore[type-arg]
+    ) -> dict[str, Any]:
+        with logged_tool_call("nutrition_get_entry", ctx):
+            try:
+                return repository.get_entry(entry_id)
+            except Exception as error:
+                raise _translate_error(error) from error
 
     @server.tool(
         name="nutrition_update_entry",
@@ -154,11 +164,13 @@ def create_server(
         expected_revision: Annotated[int, Field(ge=1)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
         changes: EntryChanges,
+        ctx: MCPContext,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        try:
-            return repository.update_entry(entry_id, expected_revision, reason, changes)
-        except Exception as error:
-            raise _translate_error(error) from error
+        with logged_tool_call("nutrition_update_entry", ctx):
+            try:
+                return repository.update_entry(entry_id, expected_revision, reason, changes)
+            except Exception as error:
+                raise _translate_error(error) from error
 
     @server.tool(
         name="nutrition_delete_entry",
@@ -169,11 +181,13 @@ def create_server(
         entry_id: str,
         expected_revision: Annotated[int, Field(ge=1)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
+        ctx: MCPContext,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        try:
-            return repository.delete_entry(entry_id, expected_revision, reason)
-        except Exception as error:
-            raise _translate_error(error) from error
+        with logged_tool_call("nutrition_delete_entry", ctx):
+            try:
+                return repository.delete_entry(entry_id, expected_revision, reason)
+            except Exception as error:
+                raise _translate_error(error) from error
 
     @server.tool(
         name="nutrition_list_entries",
@@ -185,21 +199,23 @@ def create_server(
     )
     def nutrition_list_entries(
         window: QueryWindow,
+        ctx: MCPContext,  # type: ignore[type-arg]
         kind: EntryKind | None = None,
         cursor: str | None = None,
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
     ) -> dict[str, Any]:
-        try:
-            return repository.list_entries(
-                ListEntriesInput(
-                    window=window_with_default(window),
-                    kind=kind,
-                    cursor=cursor,
-                    limit=limit,
+        with logged_tool_call("nutrition_list_entries", ctx):
+            try:
+                return repository.list_entries(
+                    ListEntriesInput(
+                        window=window_with_default(window),
+                        kind=kind,
+                        cursor=cursor,
+                        limit=limit,
+                    )
                 )
-            )
-        except Exception as error:
-            raise _translate_error(error) from error
+            except Exception as error:
+                raise _translate_error(error) from error
 
     @server.tool(
         name="nutrition_summarize",
@@ -211,14 +227,16 @@ def create_server(
     )
     def nutrition_summarize(
         window: QueryWindow,
+        ctx: MCPContext,  # type: ignore[type-arg]
         grouping: Literal["day", "whole_range"] = "whole_range",
     ) -> dict[str, Any]:
-        try:
-            return repository.summarize(
-                SummarizeInput(window=window_with_default(window), grouping=grouping)
-            )
-        except Exception as error:
-            raise _translate_error(error) from error
+        with logged_tool_call("nutrition_summarize", ctx):
+            try:
+                return repository.summarize(
+                    SummarizeInput(window=window_with_default(window), grouping=grouping)
+                )
+            except Exception as error:
+                raise _translate_error(error) from error
 
     @server.tool(
         name="nutrition_set_goals",
@@ -232,19 +250,21 @@ def create_server(
         effective_from: date,
         targets: NutritionValues,
         reason: Annotated[str, Field(min_length=1, max_length=500)],
+        ctx: MCPContext,  # type: ignore[type-arg]
         timezone: str = default_timezone,
     ) -> dict[str, Any]:
-        try:
-            return repository.set_goals(
-                GoalInput(
-                    effective_from=effective_from,
-                    timezone=timezone,
-                    targets=targets,
-                    reason=reason,
+        with logged_tool_call("nutrition_set_goals", ctx):
+            try:
+                return repository.set_goals(
+                    GoalInput(
+                        effective_from=effective_from,
+                        timezone=timezone,
+                        targets=targets,
+                        reason=reason,
+                    )
                 )
-            )
-        except Exception as error:
-            raise _translate_error(error) from error
+            except Exception as error:
+                raise _translate_error(error) from error
 
     @server.tool(
         name="nutrition_get_goals",
@@ -255,15 +275,17 @@ def create_server(
         annotations=READ_ONLY,
     )
     def nutrition_get_goals(
+        ctx: MCPContext,  # type: ignore[type-arg]
         on_date: date | None = None,
         timezone: str = default_timezone,
         include_history: bool = True,
     ) -> dict[str, Any]:
-        try:
-            return repository.get_goals(
-                on_date=on_date, timezone=timezone, include_history=include_history
-            )
-        except Exception as error:
-            raise _translate_error(error) from error
+        with logged_tool_call("nutrition_get_goals", ctx):
+            try:
+                return repository.get_goals(
+                    on_date=on_date, timezone=timezone, include_history=include_history
+                )
+            except Exception as error:
+                raise _translate_error(error) from error
 
     return server

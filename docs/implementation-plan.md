@@ -110,7 +110,7 @@ Acceptance criteria:
   override for any broader address.
 - [x] Add startup migration and database readiness checks.
 - [x] Add loopback health/readiness endpoints or SDK-supported equivalents.
-- [ ] Add structured journald-friendly logging with correlation IDs and content
+- [x] Add structured journald-friendly logging with correlation IDs and content
   redaction.
 - [ ] Handle SIGTERM and drain in-flight requests within systemd stop timeout.
 - [ ] Add HTTP-level and MCP-client integration tests.
@@ -119,7 +119,7 @@ Acceptance criteria:
 
 - [ ] The server survives concurrent reads and serialized writes without
   database-lock leakage to the MCP client.
-- [ ] Logs contain no raw request bodies, nutrition notes, tunnel credentials,
+- [x] Logs contain no raw request bodies, nutrition notes, tunnel credentials,
   or API keys.
 - [ ] Graceful shutdown leaves the database consistent.
 - [ ] An integration test exercises create, correct, query, summarize, goal, and
@@ -183,7 +183,7 @@ must use the sops-managed key.
 - [x] Verify ChatGPT can discover all eight tools with correct descriptions and
   annotations.
 - [x] Log a meal from a photo and inspect the stored assumptions and confidence.
-- [ ] Clarify a portion and verify the original entry is revised, not duplicated.
+- [x] Clarify a portion and verify the original entry is revised, not duplicated.
 - [ ] Query recent entries and a date-range summary.
 - [ ] Query today's entries and summary using the relative-day window and verify
   the returned resolved interval.
@@ -252,3 +252,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 1, 4–5 | Verified all eight tools through Streamable HTTP, passed the full flake check and NixOS closure build, and documented direct Codex attachment. | `nix flake check --print-build-logs`; local MCP lifecycle test; `.codex/config.toml` |
 | 2026-08-27 | 6–7 | Pinned the reviewed tunnel-client flake, passed `doctor`, connected the live local tunnel, and documented file-reference-only use of the temporary development key; a ChatGPT tool call remains pending. | `flake.lock`, `docs/local-testing.md`; tunnel-client startup metadata |
 | 2026-08-27 | 7 | Completed ChatGPT connector discovery and the first photo-to-log call through the live tunnel. Read-only inspection confirmed one entry, four estimated components, medium confidence, explicit assumptions, and totals matching the conversation. | Local `nutrition.sqlite3`; redacted MCP and tunnel access logs |
+| 2026-08-27 | 4, 7 | Confirmed ChatGPT revised the original meal to revision 2 and set today's goal. Fixed one-day whole-range summaries omitting the effective goal, added goal-progress regression coverage, and added redacted structured tool outcome logs. | Local database audit rows; repository and observability tests |

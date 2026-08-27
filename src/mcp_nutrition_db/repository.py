@@ -8,7 +8,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Iterable, Mapping
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
@@ -597,6 +597,16 @@ class NutritionRepository:
             groups["whole_range"] = []
 
         summaries = []
+        whole_range_goal_date = None
+        if request.grouping == "whole_range":
+            local_start = resolved.start.astimezone(zone)
+            local_end = resolved.end.astimezone(zone)
+            if (
+                local_start.timetz().replace(tzinfo=None) == time.min
+                and local_end.timetz().replace(tzinfo=None) == time.min
+                and local_end.date() == local_start.date() + timedelta(days=1)
+            ):
+                whole_range_goal_date = local_start.date()
         for key, group_entries in groups.items():
             values: dict[str, float | None] = {}
             completeness: dict[str, dict[str, int | bool]] = {}
@@ -614,9 +624,12 @@ class NutritionRepository:
                 }
             goal = None
             goal_progress = None
-            if request.grouping == "day":
+            goal_date = (
+                date.fromisoformat(key) if request.grouping == "day" else whole_range_goal_date
+            )
+            if goal_date is not None:
                 goal = self.get_goals(
-                    on_date=date.fromisoformat(key),
+                    on_date=goal_date,
                     timezone=resolved.timezone,
                     include_history=False,
                 )["current"]
@@ -630,7 +643,11 @@ class NutritionRepository:
                             "target": target,
                             "consumed": consumed,
                             "remaining": None if consumed is None else round(target - consumed, 3),
-                            "fraction": None if consumed is None else round(consumed / target, 6),
+                            "fraction": (
+                                None
+                                if consumed is None or target == 0
+                                else round(consumed / target, 6)
+                            ),
                         }
             summaries.append(
                 {

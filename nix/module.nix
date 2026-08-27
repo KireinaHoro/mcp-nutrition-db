@@ -33,6 +33,12 @@ in
       description = "IANA timezone used when a tool call omits one.";
     };
 
+    logLevel = lib.mkOption {
+      type = lib.types.enum [ "debug" "info" "warning" "error" ];
+      default = "info";
+      description = "Minimum level for redacted structured application logs.";
+    };
+
     stateDirectory = lib.mkOption {
       type = lib.types.str;
       default = "mcp-nutrition-db";
@@ -69,6 +75,8 @@ in
           (toString cfg.port)
           "--timezone"
           cfg.defaultTimezone
+          "--log-level"
+          cfg.logLevel
         ];
         Restart = "on-failure";
         RestartSec = 2;

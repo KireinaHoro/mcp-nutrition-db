@@ -445,6 +445,7 @@ services.mcp-nutrition-db = {
   listenAddress = "127.0.0.1";
   port = 8787;
   defaultTimezone = "Europe/Zurich";
+  logLevel = "info";
   stateDirectory = "mcp-nutrition-db";
 };
 ```
