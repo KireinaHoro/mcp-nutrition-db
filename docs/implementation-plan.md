@@ -192,6 +192,12 @@ must use the sops-managed key.
 - [x] Verify a stale-revision conflict leads ChatGPT to refresh before retrying.
 - [ ] Verify tunnel and service failures produce understandable user-facing
   behavior without exposing internal details.
+  - Known issue: with the local tunnel client stopped, ChatGPT remained on
+    “Verbindung zur App wird hergestellt” for more than five minutes without an
+    actionable timeout. Manual cancellation did not clearly prevent a queued
+    read from being delivered after reconnection. This behavior is upstream of
+    the loopback MCP service and must be rechecked against future ChatGPT/tunnel
+    releases.
 - [x] Run the local tunnel integration suite with `./api-key` when available,
   without exposing its contents in process arguments or logs.
 
@@ -255,3 +261,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 4, 7 | Confirmed ChatGPT revised the original meal to revision 2 and set today's goal. Fixed one-day whole-range summaries omitting the effective goal, added goal-progress regression coverage, and added redacted structured tool outcome logs. | Local database audit rows; repository and observability tests |
 | 2026-08-27 | 7 | Verified a second photo meal and in-conversation correction: the breakfast advanced to revision 2, its original five-component snapshot remained intact, and current provenance spans estimates, user clarification, and a visible nutrition label. Today's two-entry summary correctly reports its resolved interval and goal progress. | Local database audit rows; live MCP summary; redacted tool logs |
 | 2026-08-27 | 7 | Completed ChatGPT tests for relative-day and date-range queries, current and historical goals, stale-revision recovery, destructive confirmation, and soft deletion. Stopped the tunnel client for the remaining user-facing failure and recovery test while leaving the loopback backend healthy. | User-confirmed ChatGPT results; local tunnel test session |
+| 2026-08-27 | 7 | Tested tunnel outage and recovery. ChatGPT showed a non-terminating connection message for over five minutes, so understandable failure behavior remains unmet. Restarting the tunnel restored normal calls without restarting the backend; redacted logs confirmed subsequent list/get operations succeeded. | User-observed ChatGPT behavior; tunnel and MCP structured logs |
