@@ -184,15 +184,15 @@ must use the sops-managed key.
   annotations.
 - [x] Log a meal from a photo and inspect the stored assumptions and confidence.
 - [x] Clarify a portion and verify the original entry is revised, not duplicated.
-- [ ] Query recent entries and a date-range summary.
-- [ ] Query today's entries and summary using the relative-day window and verify
+- [x] Query recent entries and a date-range summary.
+- [x] Query today's entries and summary using the relative-day window and verify
   the returned resolved interval.
-- [ ] Set goals and verify current and historical goal comparisons.
-- [ ] Test destructive-tool confirmation and soft deletion.
-- [ ] Verify a stale-revision conflict leads ChatGPT to refresh before retrying.
+- [x] Set goals and verify current and historical goal comparisons.
+- [x] Test destructive-tool confirmation and soft deletion.
+- [x] Verify a stale-revision conflict leads ChatGPT to refresh before retrying.
 - [ ] Verify tunnel and service failures produce understandable user-facing
   behavior without exposing internal details.
-- [ ] Run the local tunnel integration suite with `./api-key` when available,
+- [x] Run the local tunnel integration suite with `./api-key` when available,
   without exposing its contents in process arguments or logs.
 
 Acceptance criteria:
@@ -254,3 +254,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-27 | 7 | Completed ChatGPT connector discovery and the first photo-to-log call through the live tunnel. Read-only inspection confirmed one entry, four estimated components, medium confidence, explicit assumptions, and totals matching the conversation. | Local `nutrition.sqlite3`; redacted MCP and tunnel access logs |
 | 2026-08-27 | 4, 7 | Confirmed ChatGPT revised the original meal to revision 2 and set today's goal. Fixed one-day whole-range summaries omitting the effective goal, added goal-progress regression coverage, and added redacted structured tool outcome logs. | Local database audit rows; repository and observability tests |
 | 2026-08-27 | 7 | Verified a second photo meal and in-conversation correction: the breakfast advanced to revision 2, its original five-component snapshot remained intact, and current provenance spans estimates, user clarification, and a visible nutrition label. Today's two-entry summary correctly reports its resolved interval and goal progress. | Local database audit rows; live MCP summary; redacted tool logs |
+| 2026-08-27 | 7 | Completed ChatGPT tests for relative-day and date-range queries, current and historical goals, stale-revision recovery, destructive confirmation, and soft deletion. Stopped the tunnel client for the remaining user-facing failure and recovery test while leaving the loopback backend healthy. | User-confirmed ChatGPT results; local tunnel test session |
