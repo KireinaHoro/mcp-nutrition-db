@@ -35,9 +35,9 @@ through Secure MCP Tunnel instead.
 
 ## Initialize the local tunnel profile
 
-The project flake pins the tunnel client supplied by
-`github:nakasyou/openai-secure-tunnel-nix`. The temporary development key must
-be present at `./api-key`; never use that key for the production service.
+The sibling deployment flake at `../flakes` pins the same tunnel client used on
+`kage` and includes it in its development shell. The temporary development key
+must be present at `./api-key`; never use that key for the production service.
 
 Set the revealed tunnel identifier in the current shell. The identifier is not
 secret, but keeping it out of this repository makes the app flake reusable:
@@ -50,7 +50,7 @@ Create an ignored local profile. The profile contains only a reference to the
 key file, not the key value:
 
 ```console
-nix run .#tunnel-client -- init \
+nix develop ../flakes --command tunnel-client init \
   --profile nutrition-local \
   --profile-dir ./.tunnel-client \
   --tunnel-id "$NUTRITION_TUNNEL_ID" \
@@ -61,7 +61,7 @@ nix run .#tunnel-client -- init \
 Validate local reachability and control-plane configuration:
 
 ```console
-nix run .#tunnel-client -- doctor \
+nix develop ../flakes --command tunnel-client doctor \
   --profile nutrition-local \
   --profile-dir ./.tunnel-client \
   --explain
@@ -70,7 +70,7 @@ nix run .#tunnel-client -- doctor \
 Then keep the client running while ChatGPT discovers or invokes tools:
 
 ```console
-nix run .#tunnel-client -- run \
+nix develop ../flakes --command tunnel-client run \
   --profile nutrition-local \
   --profile-dir ./.tunnel-client
 ```

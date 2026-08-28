@@ -443,8 +443,9 @@ This database contains sensitive personal dietary information.
 - Local development may use the ephemeral repository-root file `./api-key`,
   which is gitignored. It is only for direct local tunnel-client tests, must be
   passed using the client's file/credential mechanism, and must never be copied
-  into Nix configuration, fixtures, snapshots, logs, or production. It will be
-  revoked and removed after development.
+  into Nix configuration, fixtures, snapshots, logs, or production. The client
+  is supplied by the sibling deployment flake rather than this application
+  flake. The key will be revoked and removed after development.
 - The tunnel ID is configuration metadata, not a credential, and may remain as
   a literal in the private `flakes` repository.
 - The SQLite database and backups must be readable only by the service account
