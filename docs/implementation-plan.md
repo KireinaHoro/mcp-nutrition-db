@@ -130,8 +130,8 @@ Acceptance criteria:
   60% credit, with no implicit source-specific multiplier.
 - [ ] Incoming recovery is consumed before same-day exercise allowance and
   cannot recursively create recovery credit.
-- [ ] Unused credited exercise below 500 kcal schedules nothing; qualifying
-  credit is weighted 50%/30%/20% over the next three days.
+- [ ] Every positive amount of unused credited exercise is weighted
+  50%/30%/20% over the next three days, without an activation discontinuity.
 - [ ] Each destination is independently capped at its planned deficit; clipped
   overflow and missed allocations expire without redistribution. Colliding
   allocations share the aggregate destination cap proportionally.
@@ -311,3 +311,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-28 | 5–6 | Removed the tunnel client from this application's inputs and development shell. Local tunnel tests now consume the client exposed by the sibling deployment flake, which already owns the production package and module pin. | Application and deployment flake checks |
 | 2026-08-30 | 5–7 | A direct Codex POST to the tunnel control-plane URL returned `404`, establishing that it is not a Streamable HTTP MCP endpoint. Restored project-scoped Codex to the local development listener; production remains available through the configured ChatGPT Tunnel surface. | Observed MCP initialization response; official Secure MCP Tunnel architecture documentation |
 | 2026-08-30 | 0, 3A | Accepted and documented `energy-credit/v1`: confidence-adjusted exercise allowance, bounded non-recurring recovery credits, explicit MCP presentation, and an implementation checklist. | `docs/energy-credit-policy.md`; design decision log |
+| 2026-08-30 | 0, 3A | Removed the unimplemented 500 kcal recovery activation gate from `energy-credit/v1`; every positive unused credit now follows the same continuous 50%/30%/20% calculation. | `docs/energy-credit-policy.md`; Phase 3A acceptance criteria |

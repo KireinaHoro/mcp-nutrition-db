@@ -3,6 +3,7 @@
 - Policy ID: `energy-credit/v1`
 - Status: Accepted design; not yet implemented
 - Accepted: 2026-08-30
+- Last revised: 2026-08-30
 - Applies when: a release that declares this policy ID is deployed
 
 ## 1. Purpose
@@ -114,16 +115,16 @@ optional exercise allowance.
 Recovery scheduling uses the confidence-adjusted, unused same-day exercise
 credit calculated above.
 
-1. If `unused_exercise_credit < 500 kcal`, schedule nothing.
-2. Otherwise calculate three independent candidate allocations:
+1. Calculate three independent candidate allocations from all positive
+   `unused_exercise_credit`:
    - next local day: `50%`;
    - two local days later: `30%`;
    - three local days later: `20%`.
-3. Cap each candidate independently at that destination day's planned deficit.
+2. Cap each candidate independently at that destination day's planned deficit.
    Under the current 500 kcal deficit, this is a 500 kcal daily cap.
-4. Any amount clipped by a daily cap expires. It is not redistributed to a
+3. Any amount clipped by a daily cap expires. It is not redistributed to a
    later day.
-5. Any scheduled amount not consumed on its destination day expires. It does
+4. Any scheduled amount not consumed on its destination day expires. It does
    not roll forward and does not create another recovery schedule.
 
 The destination-day cap applies to the aggregate incoming recovery from all
@@ -132,8 +133,8 @@ and their sum exceeds its cap, reduce those candidates proportionally to fit;
 the clipped portions expire. This keeps the result independent of processing
 order and prevents consecutive large exercise days from multiplying the cap.
 
-For each qualifying source day, offsets `n = 1, 2, 3` have weights `0.50`,
-`0.30`, and `0.20`. For each destination day `t`:
+For each source day with positive unused exercise credit, offsets `n = 1, 2, 3`
+have weights `0.50`, `0.30`, and `0.20`. For each destination day `t`:
 
 ```text
 candidate[d, n] = unused_exercise_credit[d] * weight[n]
@@ -146,9 +147,10 @@ if raw_incoming[t] > 0:
 expired_at_creation[d] = unused_exercise_credit[d] - sum(scheduled[d, n])
 ```
 
-The threshold is evaluated before distribution. It avoids creating small,
-noisy balances on ordinary activity days; it is not a claim that recovery
-needs begin at a physiological boundary of exactly 500 kcal.
+There is no minimum activation threshold. Any positive unused exercise credit
+is distributed, so the result changes continuously rather than jumping between
+no recovery at 499 kcal and a full schedule at 500 kcal. Zero unused credit
+naturally produces three zero candidates and no recovery allowance.
 
 ## 6. Worked examples
 
@@ -184,11 +186,11 @@ deficit on each destination day, the schedule is 500/500/500 kcal and
 All derived energy-balance responses must include `policy_id`. Stored training,
 meal, goal, and audit facts remain separate from derived policy results.
 
-A later semantic change requires a new policy ID. Tunable configuration such
-as confidence multipliers, threshold, weights, and caps must be effective-dated
-if historical answers are intended to remain reproducible. The API must make
-clear whether a historical result was calculated using the policy effective on
-that historical day or recalculated under the current policy.
+A later semantic change after activation requires a new policy ID. Tunable
+configuration such as confidence multipliers, weights, and caps must be
+effective-dated if historical answers are intended to remain reproducible. The
+API must make clear whether a historical result was calculated using the policy
+effective on that historical day or recalculated under the current policy.
 
 Corrections can affect the source day and its following three days. The
 implementation should derive the schedule deterministically from current facts
@@ -223,7 +225,6 @@ For example:
   "policy_id": "energy-credit/v1",
   "status": "active",
   "confidence_multipliers": {"high": 1.0, "medium": 0.8, "low": 0.6},
-  "minimum_unused_credit_kcal": 500,
   "recovery_weights": [0.5, 0.3, 0.2],
   "daily_cap": "destination_planned_deficit",
   "overflow": "expire",
