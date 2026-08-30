@@ -147,10 +147,8 @@ if raw_incoming[t] > 0:
 expired_at_creation[d] = unused_exercise_credit[d] - sum(scheduled[d, n])
 ```
 
-There is no minimum activation threshold. Any positive unused exercise credit
-is distributed, so the result changes continuously rather than jumping between
-no recovery at 499 kcal and a full schedule at 500 kcal. Zero unused credit
-naturally produces three zero candidates and no recovery allowance.
+Every positive amount of unused exercise credit is distributed according to
+the weights above. Zero unused credit produces no recovery allowance.
 
 ## 6. Worked examples
 
@@ -186,7 +184,7 @@ deficit on each destination day, the schedule is 500/500/500 kcal and
 All derived energy-balance responses must include `policy_id`. Stored training,
 meal, goal, and audit facts remain separate from derived policy results.
 
-A later semantic change after activation requires a new policy ID. Tunable
+A later semantic change after deployment requires a new policy ID. Tunable
 configuration such as confidence multipliers, weights, and caps must be
 effective-dated if historical answers are intended to remain reproducible. The
 API must make clear whether a historical result was calculated using the policy
