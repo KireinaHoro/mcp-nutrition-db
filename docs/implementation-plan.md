@@ -223,6 +223,9 @@ must use the sops-managed key.
   mode for the intended account or workspace.
 - [x] Verify ChatGPT can discover all thirteen tools with correct descriptions
   and annotations after the training-capable build is deployed.
+- [ ] Refresh ChatGPT discovery and verify the schema-v3 build exposes all
+  fourteen tools, including `nutrition_get_energy_policy` and the revised
+  training contract.
 - [x] Log a meal from a photo and inspect the stored assumptions and confidence.
 - [x] Clarify a portion and verify the original entry is revised, not duplicated.
 - [x] Query recent entries and a date-range summary.
@@ -313,3 +316,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-30 | 5–7 | A direct Codex POST to the tunnel control-plane URL returned `404`, establishing that it is not a Streamable HTTP MCP endpoint. Restored project-scoped Codex to the local development listener; production remains available through the configured ChatGPT Tunnel surface. | Observed MCP initialization response; official Secure MCP Tunnel architecture documentation |
 | 2026-08-30 | 0, 3A | Accepted and documented `energy-credit/v1`: confidence-adjusted exercise allowance, bounded non-recurring recovery credits, explicit MCP presentation, and an implementation checklist. | `docs/energy-credit-policy.md`; design decision log |
 | 2026-08-30 | 2–4, 3A | Implemented schema v3 training provenance and the derived `energy-credit/v1` ledger, added the policy tool and MCP guidance, migrated a production snapshot successfully, and covered confidence, recovery, collision, correction, incomplete-intake, stdio, and Streamable HTTP behavior. | 29 tests; full flake check; migrated-copy `PRAGMA quick_check` |
+| 2026-08-30 | 3A, 6–8 | Deployed schema v3 and `energy-credit/v1` to `kage`; verified both units, schema health, MCP initialization, all fourteen tools, the policy response, and today's production ledger. Audited the four migrated training records into explicit device, HR/GPS, or power-meter evidence and created a fresh incremental backup. | App commit `a5595f4`; flakes commit `a13bda0`; production MCP and systemd evidence |
