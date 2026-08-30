@@ -50,6 +50,17 @@ class TrainingSourceType(StrEnum):
     OTHER = "other"
 
 
+class TrainingMeasurementMethod(StrEnum):
+    INDIRECT_CALORIMETRY = "indirect_calorimetry"
+    POWER_METER = "power_meter"
+    HEART_RATE_GPS_MODEL = "heart_rate_gps_model"
+    FITNESS_MACHINE = "fitness_machine"
+    DEVICE_ESTIMATE = "device_estimate"
+    MANUAL_ESTIMATE = "manual_estimate"
+    LEGACY_UNSPECIFIED = "legacy_unspecified"
+    OTHER = "other"
+
+
 class NutritionValues(StrictModel):
     calories_kcal: float | None = Field(default=None, ge=0, le=100_000)
     protein_g: float | None = Field(default=None, ge=0, le=10_000)
@@ -235,12 +246,29 @@ class TrainingSource(StrictModel):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class TrainingEvidence(StrictModel):
+    device: str | None = Field(default=None, max_length=200)
+    calculation: str | None = Field(default=None, max_length=500)
+    average_power_w: float | None = Field(default=None, gt=0, le=10_000)
+    mechanical_work_kj: float | None = Field(default=None, gt=0, le=1_000_000)
+    detail: str | None = Field(default=None, max_length=1_000)
+
+    @model_validator(mode="after")
+    def require_evidence(self) -> TrainingEvidence:
+        if all(value is None for value in self.model_dump().values()):
+            raise ValueError("at least one training evidence field is required")
+        return self
+
+
 class LogTrainingInput(StrictModel):
     occurred_at: datetime
     activity: str = Field(min_length=1, max_length=200)
     duration_minutes: float = Field(gt=0, le=10_080)
-    calories_burned_kcal: float = Field(gt=0, le=100_000)
+    reported_burn_kcal: float = Field(gt=0, le=100_000)
+    confidence: Confidence
+    measurement_method: TrainingMeasurementMethod
     source: TrainingSource
+    evidence: TrainingEvidence | None = None
     timezone: str = DEFAULT_TIMEZONE
     notes: str | None = Field(default=None, max_length=5_000)
     force_new: bool = False
@@ -254,8 +282,11 @@ class TrainingChanges(StrictModel):
     timezone: str | None = None
     activity: str | None = Field(default=None, min_length=1, max_length=200)
     duration_minutes: float | None = Field(default=None, gt=0, le=10_080)
-    calories_burned_kcal: float | None = Field(default=None, gt=0, le=100_000)
+    reported_burn_kcal: float | None = Field(default=None, gt=0, le=100_000)
+    confidence: Confidence | None = None
+    measurement_method: TrainingMeasurementMethod | None = None
     source: TrainingSource | None = None
+    evidence: TrainingEvidence | None = None
     notes: str | None = Field(default=None, max_length=5_000)
 
     @field_validator("occurred_at")

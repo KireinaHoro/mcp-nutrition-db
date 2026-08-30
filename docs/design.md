@@ -250,10 +250,11 @@ entries had known values.
 ### 5.8 Training tools
 
 `nutrition_log_training` records a session with `occurred_at`, `activity`,
-`duration_minutes`, `calories_burned_kcal`, timezone, and a required source
-(`estimated`, `wearable`, `fitness_machine`, `app`, `user_provided`, or
-`other`). Exact retries use the same automatic ten-minute suppression as meal
-creates. The complete burn is attributed to the training's local start date.
+`duration_minutes`, `reported_burn_kcal`, explicit confidence, measurement
+method, timezone, provenance source, and optional structured evidence. Exact
+retries use the same automatic ten-minute suppression as meal creates. The
+reported value is preserved; the server also returns the confidence-adjusted
+credited value. Burn is attributed to the training's local start date.
 
 `nutrition_get_training`, `nutrition_update_training`,
 `nutrition_delete_training`, and `nutrition_list_trainings` provide the same
@@ -264,20 +265,17 @@ and opaque pagination conventions as nutrition entries.
 
 Creates or replaces a goal version effective on a calendar date. Input includes
 `effective_from`, `timezone`, `base_burn_kcal`, optional `deficit_kcal`, and
-optional non-calorie macro targets. Calories are derived rather than accepted as
-a second independent target:
+optional non-calorie macro targets. The ordinary calorie target is derived
+rather than accepted as a second independent target:
 
-`calorie_target_kcal = base_burn_kcal + training_burn_kcal - deficit_kcal`
+`ordinary_target_kcal = base_burn_kcal - deficit_kcal`
 
-The deficit must be non-negative and lower than the base burn. Training burn is
-the sum of active training records assigned to the requested local date.
-
-This is the currently implemented first model. The accepted replacement is the
-versioned [exercise and recovery energy-credit policy](energy-credit-policy.md),
-which preserves reported burn, applies an explicit confidence multiplier,
-distinguishes an optional exercise allowance from the ordinary target, and can
-schedule bounded non-recurring recovery allowances. Until a release declares
-that policy ID, production results retain the first-model semantics above.
+The deficit must be non-negative and lower than the base burn. The returned
+`energy_budget` applies the versioned
+[exercise and recovery energy-credit policy](energy-credit-policy.md) and
+separately exposes the ordinary target, incoming recovery, reported and
+credited training burn, planned baseline, available ceiling, allowance use,
+unused credit, recovery schedule, and expired amounts.
 
 Goals are effective-dated, not mutated in place, so historical summaries use
 the goal that applied on that day. Setting the same effective date replaces
@@ -289,6 +287,14 @@ With `on_date`, returns the goal version effective on that date. Without it,
 returns the current goal and the ordered goal history. The current goal includes
 the requested day's derived `energy_budget`; summaries use that same budget for
 calorie progress. The response distinguishes an unset macro target from zero.
+
+### 5.11 `nutrition_get_energy_policy`
+
+Returns the active policy ID, calculation basis, confidence multipliers,
+recovery weights, destination cap and collision rules, expiry behavior,
+formulas, allowance semantics, attribution order, and stable document
+reference. Correctness does not depend on ChatGPT calling this tool because all
+derived arithmetic remains server-side.
 
 ## 6. Canonical entry model
 
@@ -397,8 +403,11 @@ forced create records a new entry without consulting this table.
 #### `trainings`, `training_revisions`, and `training_create_fingerprints`
 
 Current correctable training records, immutable pre-change audit snapshots, and
-automatic exact-retry suppression. Training duration and burned energy are
-stored as scaled integers; soft-deleted sessions do not affect summaries.
+automatic exact-retry suppression. Training duration and reported burn are
+stored as scaled integers; confidence, measurement method, source, and
+structured evidence preserve estimate provenance. Credited burn and recovery
+balances are derived rather than stored as mutable running totals. Soft-deleted
+sessions do not affect summaries.
 
 #### `schema_migrations`
 
@@ -594,5 +603,5 @@ parallel.
 | 2026-08-27 | Make relative calendar windows first-class list and summary inputs. | ChatGPT can query `today` without calculating RFC 3339 boundaries. |
 | 2026-08-27 | Replace required caller idempotency keys with short-lived server-side exact-replay detection. | Normal LLM calls are simpler while lost-response retries remain safe. |
 | 2026-08-27 | Require nutrition provenance on every component. | Estimates, labels, restaurant declarations, and other sources remain distinguishable. |
-| 2026-08-27 | Derive calories from base burn plus training burn minus deficit. | Training corrections automatically change the relevant day's intake budget without rewriting goals. |
+| 2026-08-27 | Initial release derived calories from base burn plus training burn minus deficit. | This behavior is superseded by `energy-credit/v1`. |
 | 2026-08-30 | Adopt the versioned `energy-credit/v1` policy as the replacement energy model. | Confidence-adjusted exercise is an optional allowance; sufficiently large unused credit can create capped, non-recurring allowances over the next three days. |

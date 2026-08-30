@@ -27,7 +27,7 @@ log before or alongside the code that depends on them.
 
 ## Current status
 
-The local MVP implements the SQLite schema and all thirteen MCP tools. Repository,
+The local MVP implements the SQLite schema and all fourteen MCP tools. Repository,
 schema, calendar, MCP process, Streamable HTTP, package, and NixOS evaluation
 checks pass; see the implementation plan for the exact verified state.
 

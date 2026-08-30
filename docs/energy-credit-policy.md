@@ -1,7 +1,7 @@
 # Exercise and recovery energy-credit policy
 
 - Policy ID: `energy-credit/v1`
-- Status: Accepted design; not yet implemented
+- Status: Implemented in schema v3; production deployment pending
 - Accepted: 2026-08-30
 - Last revised: 2026-08-30
 - Applies when: a release that declares this policy ID is deployed

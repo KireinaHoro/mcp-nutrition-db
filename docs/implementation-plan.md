@@ -111,33 +111,34 @@ Acceptance criteria:
 
 - [x] Define and version the accepted policy in
   `docs/energy-credit-policy.md`.
-- [ ] Migrate training provenance to store reported burn, measurement method,
+- [x] Migrate training provenance to store reported burn, measurement method,
   confidence, and supporting evidence without losing schema-v2 history.
-- [ ] Add effective-dated policy configuration and deterministic calculations
-  for credited burn, same-day use, recovery schedules, caps, and expiry.
-- [ ] Expose reported and credited burn separately in training and summary
+- [x] Add versioned policy constants, an explicit current-policy calculation
+  basis, and deterministic calculations for credited burn, same-day use,
+  recovery schedules, caps, and expiry.
+- [x] Expose reported and credited burn separately in training and summary
   responses.
-- [ ] Add a read-only `nutrition_get_energy_policy` tool and return `policy_id`
+- [x] Add a read-only `nutrition_get_energy_policy` tool and return `policy_id`
   from every policy-derived result.
-- [ ] Update server instructions and affected tool descriptions so allowances
+- [x] Update server instructions and affected tool descriptions so allowances
   are not presented as required intake targets.
-- [ ] Recalculate the source day and the following three local days after a
+- [x] Recalculate the source day and the following three local days after a
   relevant meal, training, goal, or policy correction.
 
 Acceptance criteria:
 
-- [ ] High-, medium-, and low-confidence records receive exactly 100%, 80%, and
+- [x] High-, medium-, and low-confidence records receive exactly 100%, 80%, and
   60% credit, with no implicit source-specific multiplier.
-- [ ] Incoming recovery is consumed before same-day exercise allowance and
+- [x] Incoming recovery is consumed before same-day exercise allowance and
   cannot recursively create recovery credit.
-- [ ] Every positive amount of unused credited exercise is weighted
+- [x] Every positive amount of unused credited exercise is weighted
   50%/30%/20% over the next three days.
-- [ ] Each destination is independently capped at its planned deficit; clipped
+- [x] Each destination is independently capped at its planned deficit; clipped
   overflow and missed allocations expire without redistribution. Colliding
   allocations share the aggregate destination cap proportionally.
-- [ ] Corrections and deletion deterministically update all affected days while
+- [x] Corrections and deletion deterministically update all affected days while
   retaining auditable source facts.
-- [ ] Unit, repository, migration, MCP contract, and Streamable HTTP tests cover
+- [x] Unit, repository, migration, MCP contract, and Streamable HTTP tests cover
   the examples and invariants in the policy document.
 - [ ] ChatGPT reports the ordinary target, recovery allowance, and exercise
   allowance distinctly in an end-to-end production test.
@@ -311,3 +312,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-28 | 5–6 | Removed the tunnel client from this application's inputs and development shell. Local tunnel tests now consume the client exposed by the sibling deployment flake, which already owns the production package and module pin. | Application and deployment flake checks |
 | 2026-08-30 | 5–7 | A direct Codex POST to the tunnel control-plane URL returned `404`, establishing that it is not a Streamable HTTP MCP endpoint. Restored project-scoped Codex to the local development listener; production remains available through the configured ChatGPT Tunnel surface. | Observed MCP initialization response; official Secure MCP Tunnel architecture documentation |
 | 2026-08-30 | 0, 3A | Accepted and documented `energy-credit/v1`: confidence-adjusted exercise allowance, bounded non-recurring recovery credits, explicit MCP presentation, and an implementation checklist. | `docs/energy-credit-policy.md`; design decision log |
+| 2026-08-30 | 2–4, 3A | Implemented schema v3 training provenance and the derived `energy-credit/v1` ledger, added the policy tool and MCP guidance, migrated a production snapshot successfully, and covered confidence, recovery, collision, correction, incomplete-intake, stdio, and Streamable HTTP behavior. | 29 tests; full flake check; migrated-copy `PRAGMA quick_check` |

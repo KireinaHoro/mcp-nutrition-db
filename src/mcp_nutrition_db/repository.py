@@ -39,8 +39,11 @@ NUTRIENTS: dict[str, tuple[str, int]] = {
     "sodium_mg": ("sodium_mg", 1),
 }
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 CREATE_RETRY_WINDOW = timedelta(minutes=10)
+ENERGY_POLICY_ID = "energy-credit/v1"
+CONFIDENCE_MULTIPLIERS_PERMILLE = {"high": 1_000, "medium": 800, "low": 600}
+RECOVERY_WEIGHTS_PERMILLE = (500, 300, 200)
 
 
 class RepositoryError(RuntimeError):
@@ -240,6 +243,31 @@ CREATE INDEX training_fingerprints_digest_idx
     ON training_create_fingerprints(request_digest, created_at DESC);
 """
 
+MIGRATION_3 = """
+ALTER TABLE trainings ADD COLUMN confidence TEXT NOT NULL DEFAULT 'medium'
+    CHECK (confidence IN ('high', 'medium', 'low'));
+ALTER TABLE trainings ADD COLUMN measurement_method TEXT NOT NULL DEFAULT 'legacy_unspecified'
+    CHECK (measurement_method IN (
+        'indirect_calorimetry', 'power_meter', 'heart_rate_gps_model',
+        'fitness_machine', 'device_estimate', 'manual_estimate',
+        'legacy_unspecified', 'other'
+    ));
+ALTER TABLE trainings ADD COLUMN evidence_json TEXT;
+
+UPDATE trainings SET
+    confidence = CASE
+        WHEN source_type = 'estimated' THEN 'low'
+        ELSE 'medium'
+    END,
+    measurement_method = CASE source_type
+        WHEN 'estimated' THEN 'manual_estimate'
+        WHEN 'wearable' THEN 'device_estimate'
+        WHEN 'fitness_machine' THEN 'fitness_machine'
+        WHEN 'app' THEN 'device_estimate'
+        ELSE 'legacy_unspecified'
+    END;
+"""
+
 
 class NutritionRepository:
     def __init__(self, database_path: str | Path, *, clock: Any = _utc_now) -> None:
@@ -283,6 +311,12 @@ class NutritionRepository:
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (2, _timestamp(self.clock())),
+                )
+            if 3 not in versions:
+                connection.executescript(MIGRATION_3)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (3, _timestamp(self.clock())),
                 )
 
     def schema_version(self) -> int:
@@ -574,15 +608,26 @@ class NutritionRepository:
 
     @staticmethod
     def _training_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        reported_burn_mkcal = int(row["calories_burned_mkcal"])
+        multiplier = CONFIDENCE_MULTIPLIERS_PERMILLE[row["confidence"]]
+        credited_burn_mkcal = (reported_burn_mkcal * multiplier + 500) // 1_000
         return {
+            "policy_id": ENERGY_POLICY_ID,
             "training_id": row["training_id"],
             "revision": row["revision"],
             "occurred_at": row["occurred_at"],
             "timezone": row["timezone"],
             "activity": row["activity"],
             "duration_minutes": _unscale(row["duration_milliseconds"], 60_000),
-            "calories_burned_kcal": _unscale(row["calories_burned_mkcal"], 1_000),
+            "reported_burn_kcal": _unscale(reported_burn_mkcal, 1_000),
+            "credited_burn_kcal": _unscale(credited_burn_mkcal, 1_000),
+            "confidence": row["confidence"],
+            "confidence_multiplier": multiplier / 1_000,
+            "measurement_method": row["measurement_method"],
             "source": {"type": row["source_type"], "detail": row["source_detail"]},
+            "evidence": (
+                None if row["evidence_json"] is None else json.loads(row["evidence_json"])
+            ),
             "notes": row["notes"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -632,8 +677,9 @@ class NutritionRepository:
                 INSERT INTO trainings(
                     training_id, revision, occurred_at, occurred_at_utc, timezone,
                     activity, duration_milliseconds, calories_burned_mkcal,
-                    source_type, source_detail, notes, created_at, updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    confidence, measurement_method, source_type, source_detail,
+                    evidence_json, notes, created_at, updated_at
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     training_id,
@@ -642,9 +688,12 @@ class NutritionRepository:
                     request.timezone,
                     request.activity,
                     _scale(request.duration_minutes, 60_000),
-                    _scale(request.calories_burned_kcal, 1_000),
+                    _scale(request.reported_burn_kcal, 1_000),
+                    request.confidence.value,
+                    request.measurement_method.value,
                     request.source.type.value,
                     request.source.detail,
+                    None if request.evidence is None else request.evidence.model_dump_json(),
                     request.notes,
                     now_text,
                     now_text,
@@ -697,13 +746,23 @@ class NutritionRepository:
             if "duration_minutes" in fields:
                 assert changes.duration_minutes is not None
                 values["duration_milliseconds"] = _scale(changes.duration_minutes, 60_000)
-            if "calories_burned_kcal" in fields:
-                assert changes.calories_burned_kcal is not None
-                values["calories_burned_mkcal"] = _scale(changes.calories_burned_kcal, 1_000)
+            if "reported_burn_kcal" in fields:
+                assert changes.reported_burn_kcal is not None
+                values["calories_burned_mkcal"] = _scale(changes.reported_burn_kcal, 1_000)
+            if "confidence" in fields:
+                assert changes.confidence is not None
+                values["confidence"] = changes.confidence.value
+            if "measurement_method" in fields:
+                assert changes.measurement_method is not None
+                values["measurement_method"] = changes.measurement_method.value
             if "source" in fields:
                 assert changes.source is not None
                 values["source_type"] = changes.source.type.value
                 values["source_detail"] = changes.source.detail
+            if "evidence" in fields:
+                values["evidence_json"] = (
+                    None if changes.evidence is None else changes.evidence.model_dump_json()
+                )
             if "notes" in fields:
                 values["notes"] = changes.notes
             new_revision = expected_revision + 1
@@ -924,10 +983,41 @@ class NutritionRepository:
                 and local_end.date() == local_start.date() + timedelta(days=1)
             ):
                 whole_range_goal_date = local_start.date()
+        summary_dates = (
+            [date.fromisoformat(key) for key in groups]
+            if request.grouping == "day"
+            else ([] if whole_range_goal_date is None else [whole_range_goal_date])
+        )
+        balances: dict[str, dict[str, Any]] = {}
+        goals_for_date: dict[date, dict[str, Any]] = {}
+        if summary_dates:
+            balances = self._energy_balances(
+                min(summary_dates), max(summary_dates), resolved.timezone
+            )
+            with self._connect() as connection:
+                summary_goal_rows = connection.execute(
+                    """
+                    SELECT * FROM daily_goals
+                    WHERE timezone = ? AND effective_from <= ?
+                    ORDER BY effective_from
+                    """,
+                    (resolved.timezone, max(summary_dates).isoformat()),
+                ).fetchall()
+            for summary_date in sorted(summary_dates):
+                applicable = [
+                    row
+                    for row in summary_goal_rows
+                    if date.fromisoformat(row["effective_from"]) <= summary_date
+                ]
+                if applicable:
+                    goals_for_date[summary_date] = self._goal_from_row(applicable[-1])
         for key, group_entries in groups.items():
             group_trainings = training_groups.get(key, [])
-            training_burn = round(
-                sum(training["calories_burned_kcal"] for training in group_trainings), 3
+            reported_training_burn = round(
+                sum(training["reported_burn_kcal"] for training in group_trainings), 3
+            )
+            credited_training_burn = round(
+                sum(training["credited_burn_kcal"] for training in group_trainings), 3
             )
             values: dict[str, float | None] = {}
             completeness: dict[str, dict[str, int | bool]] = {}
@@ -949,12 +1039,9 @@ class NutritionRepository:
                 date.fromisoformat(key) if request.grouping == "day" else whole_range_goal_date
             )
             if goal_date is not None:
-                goal = self.get_goals(
-                    on_date=goal_date,
-                    timezone=resolved.timezone,
-                    include_history=False,
-                )["current"]
+                goal = goals_for_date.get(goal_date)
                 if goal is not None:
+                    goal["energy_budget"] = balances[goal_date.isoformat()]
                     goal_progress = {}
                     for nutrient, target in goal["targets"].items():
                         consumed = values[nutrient]
@@ -971,20 +1058,22 @@ class NutritionRepository:
                             ),
                         }
                     if goal["energy_budget"] is not None:
-                        calorie_target = goal["energy_budget"]["calorie_target_kcal"]
-                        calorie_consumed = values["calories_kcal"]
+                        energy = goal["energy_budget"]
+                        calorie_consumed = energy["intake_kcal"]
                         goal_progress["calories_kcal"] = {
-                            "target": calorie_target,
                             "consumed": calorie_consumed,
-                            "remaining": (
-                                None
-                                if calorie_consumed is None
-                                else round(calorie_target - calorie_consumed, 3)
+                            "intake_complete": energy["intake_complete"],
+                            "ordinary_target": energy["ordinary_target_kcal"],
+                            "remaining_to_ordinary_target": round(
+                                energy["ordinary_target_kcal"] - calorie_consumed, 3
                             ),
-                            "fraction": (
-                                None
-                                if calorie_consumed is None or calorie_target == 0
-                                else round(calorie_consumed / calorie_target, 6)
+                            "planned_baseline": energy["planned_baseline_kcal"],
+                            "remaining_to_planned_baseline": round(
+                                energy["planned_baseline_kcal"] - calorie_consumed, 3
+                            ),
+                            "available_ceiling": energy["available_ceiling_kcal"],
+                            "remaining_to_available_ceiling": round(
+                                energy["available_ceiling_kcal"] - calorie_consumed, 3
                             ),
                         }
             summaries.append(
@@ -992,14 +1081,17 @@ class NutritionRepository:
                     "group": key,
                     "entry_count": len(group_entries),
                     "training_count": len(group_trainings),
-                    "training_burn_kcal": training_burn,
+                    "reported_training_burn_kcal": reported_training_burn,
+                    "credited_training_burn_kcal": credited_training_burn,
                     "totals": values,
                     "completeness": completeness,
                     "goal": goal,
+                    "energy_balance": None if goal is None else goal["energy_budget"],
                     "goal_progress": goal_progress,
                 }
             )
         return {
+            "policy_id": ENERGY_POLICY_ID,
             "grouping": request.grouping,
             "groups": summaries,
             "resolved_window": resolved.model_dump(mode="json"),
@@ -1110,37 +1202,275 @@ class NutritionRepository:
             assert row is not None
             result = self._goal_from_row(row)
             connection.commit()
-            result["energy_budget"] = self._energy_budget(result, request.effective_from)
+            result["energy_budget"] = self.energy_balance(request.effective_from, request.timezone)
             return result
 
-    def _training_burn_for_day(self, on_date: date, timezone: str) -> float:
+    @staticmethod
+    def energy_policy() -> dict[str, Any]:
+        return {
+            "policy_id": ENERGY_POLICY_ID,
+            "status": "active",
+            "calculation_basis": "current_policy",
+            "confidence_multipliers": {"high": 1.0, "medium": 0.8, "low": 0.6},
+            "recovery_weights": [0.5, 0.3, 0.2],
+            "daily_cap": "destination_planned_deficit",
+            "collision_handling": "proportional",
+            "overflow": "expire",
+            "missed_allocation": "expire",
+            "ordinary_target_formula": "base_burn - deficit",
+            "planned_baseline_formula": "ordinary_target + incoming_recovery",
+            "available_ceiling_formula": ("planned_baseline + credited_training_burn"),
+            "allowance_semantics": "optional_ceiling_not_intake_recommendation",
+            "attribution_order": [
+                "ordinary_target",
+                "incoming_recovery",
+                "same_day_exercise_allowance",
+            ],
+            "document_ref": "docs/energy-credit-policy.md",
+        }
+
+    @staticmethod
+    def _proportional_cap(
+        candidates: list[tuple[date, int, int]], cap_mkcal: int
+    ) -> list[tuple[date, int, int, int]]:
+        total = sum(candidate for _source, _offset, candidate in candidates)
+        if total <= cap_mkcal:
+            return [(*candidate, candidate[2]) for candidate in candidates]
+        if total == 0 or cap_mkcal == 0:
+            return [(*candidate, 0) for candidate in candidates]
+
+        allocated: list[list[Any]] = []
+        for source, offset, candidate in candidates:
+            quotient, remainder = divmod(candidate * cap_mkcal, total)
+            allocated.append([source, offset, candidate, quotient, remainder])
+        remainder_units = cap_mkcal - sum(item[3] for item in allocated)
+        allocation_order = sorted(
+            range(len(allocated)),
+            key=lambda index: (-allocated[index][4], allocated[index][0], allocated[index][1]),
+        )
+        for index in allocation_order[:remainder_units]:
+            allocated[index][3] += 1
+        return [(item[0], item[1], item[2], item[3]) for item in allocated]
+
+    def _energy_balances(
+        self, start_date: date, end_date: date, timezone: str
+    ) -> dict[str, dict[str, Any]]:
+        validate_timezone(timezone)
         zone = ZoneInfo(timezone)
-        start = datetime.combine(on_date, time.min, tzinfo=zone).astimezone(UTC)
-        end = datetime.combine(on_date + timedelta(days=1), time.min, tzinfo=zone).astimezone(UTC)
+        today = self.clock().astimezone(zone).date()
         with self._connect() as connection:
-            row = connection.execute(
+            goal_rows = connection.execute(
                 """
-                SELECT COALESCE(SUM(calories_burned_mkcal), 0) AS total
-                FROM trainings
+                SELECT * FROM daily_goals
+                WHERE timezone = ? AND effective_from <= ?
+                ORDER BY effective_from
+                """,
+                (timezone, (end_date + timedelta(days=3)).isoformat()),
+            ).fetchall()
+            earliest_goal = (
+                None if not goal_rows else date.fromisoformat(goal_rows[0]["effective_from"])
+            )
+            scan_start = start_date if earliest_goal is None else min(start_date, earliest_goal)
+            scan_end = end_date + timedelta(days=3)
+            start_utc = datetime.combine(scan_start, time.min, tzinfo=zone).astimezone(UTC)
+            end_utc = datetime.combine(
+                scan_end + timedelta(days=1), time.min, tzinfo=zone
+            ).astimezone(UTC)
+            entry_rows = connection.execute(
+                """
+                SELECT e.entry_id, e.occurred_at_utc,
+                       SUM(c.calories_mkcal) AS calories_mkcal,
+                       COUNT(*) AS component_count,
+                       COUNT(c.calories_mkcal) AS known_component_count
+                FROM entries AS e
+                JOIN entry_components AS c ON c.entry_id = e.entry_id
+                WHERE e.deleted_at IS NULL
+                  AND e.occurred_at_utc >= ? AND e.occurred_at_utc < ?
+                GROUP BY e.entry_id, e.occurred_at_utc
+                """,
+                (_timestamp(start_utc), _timestamp(end_utc)),
+            ).fetchall()
+            training_rows = connection.execute(
+                """
+                SELECT * FROM trainings
                 WHERE deleted_at IS NULL AND occurred_at_utc >= ? AND occurred_at_utc < ?
                 """,
-                (_timestamp(start), _timestamp(end)),
-            ).fetchone()
-        assert row is not None
-        return _unscale(row["total"], 1_000) or 0.0
+                (_timestamp(start_utc), _timestamp(end_utc)),
+            ).fetchall()
 
-    def _energy_budget(self, goal: dict[str, Any], on_date: date) -> dict[str, float] | None:
-        base_burn = goal["base_burn_kcal"]
-        if base_burn is None:
-            return None
-        deficit = goal["deficit_kcal"]
-        training_burn = self._training_burn_for_day(on_date, goal["timezone"])
-        return {
-            "base_burn_kcal": base_burn,
-            "training_burn_kcal": training_burn,
-            "deficit_kcal": deficit,
-            "calorie_target_kcal": round(base_burn + training_burn - deficit, 3),
-        }
+        intake_by_day: dict[date, int] = {}
+        intake_complete_by_day: dict[date, bool] = {}
+        for row in entry_rows:
+            local_date = _parse_timestamp(row["occurred_at_utc"]).astimezone(zone).date()
+            intake_by_day[local_date] = intake_by_day.get(local_date, 0) + int(
+                row["calories_mkcal"] or 0
+            )
+            complete = row["component_count"] == row["known_component_count"]
+            intake_complete_by_day[local_date] = (
+                intake_complete_by_day.get(local_date, True) and complete
+            )
+
+        trainings_by_day: dict[date, list[sqlite3.Row]] = {}
+        for row in training_rows:
+            local_date = _parse_timestamp(row["occurred_at_utc"]).astimezone(zone).date()
+            trainings_by_day.setdefault(local_date, []).append(row)
+
+        goals_by_date = {date.fromisoformat(row["effective_from"]): row for row in goal_rows}
+        active_goal: sqlite3.Row | None = None
+        pending: dict[date, list[tuple[date, int, int]]] = {}
+        internal: dict[date, dict[str, Any]] = {}
+        current_date = scan_start
+        while current_date <= scan_end:
+            if current_date in goals_by_date:
+                active_goal = goals_by_date[current_date]
+            goal = None if active_goal is None else self._goal_from_row(active_goal)
+            base_mkcal = 0 if active_goal is None else int(active_goal["base_burn_mkcal"])
+            deficit_mkcal = 0 if active_goal is None else int(active_goal["deficit_mkcal"])
+            ordinary_mkcal = base_mkcal - deficit_mkcal
+
+            candidates = pending.get(current_date, [])
+            allocated = self._proportional_cap(candidates, deficit_mkcal)
+            incoming_mkcal = sum(item[3] for item in allocated)
+            for source_date, offset, candidate_mkcal, scheduled_mkcal in allocated:
+                source_schedule = internal[source_date]["recovery_schedule"]
+                source_schedule.append(
+                    {
+                        "date": current_date,
+                        "day_offset": offset,
+                        "candidate_mkcal": candidate_mkcal,
+                        "scheduled_mkcal": scheduled_mkcal,
+                    }
+                )
+
+            day_trainings = trainings_by_day.get(current_date, [])
+            reported_mkcal = sum(int(row["calories_burned_mkcal"]) for row in day_trainings)
+            credited_mkcal = sum(
+                (
+                    int(row["calories_burned_mkcal"])
+                    * CONFIDENCE_MULTIPLIERS_PERMILLE[row["confidence"]]
+                    + 500
+                )
+                // 1_000
+                for row in day_trainings
+            )
+            intake_mkcal = intake_by_day.get(current_date, 0)
+            intake_complete = intake_complete_by_day.get(current_date, True)
+            provisional = current_date >= today
+            status = "ok"
+            exercise_used_mkcal: int | None = None
+            unused_exercise_mkcal: int | None = None
+            incoming_used_mkcal: int | None = None
+            if goal is None:
+                status = "no_goal"
+            elif not intake_complete:
+                status = "incomplete_intake"
+            else:
+                incoming_used_mkcal = min(max(intake_mkcal - ordinary_mkcal, 0), incoming_mkcal)
+                exercise_used_mkcal = min(
+                    max(intake_mkcal - ordinary_mkcal - incoming_mkcal, 0),
+                    credited_mkcal,
+                )
+                unused_exercise_mkcal = credited_mkcal - exercise_used_mkcal
+
+            internal[current_date] = {
+                "date": current_date,
+                "status": status,
+                "provisional": provisional,
+                "goal": goal,
+                "base_mkcal": base_mkcal,
+                "deficit_mkcal": deficit_mkcal,
+                "ordinary_mkcal": ordinary_mkcal,
+                "intake_mkcal": intake_mkcal,
+                "intake_complete": intake_complete,
+                "reported_mkcal": reported_mkcal,
+                "credited_mkcal": credited_mkcal,
+                "incoming_mkcal": incoming_mkcal,
+                "incoming_used_mkcal": incoming_used_mkcal,
+                "exercise_used_mkcal": exercise_used_mkcal,
+                "unused_exercise_mkcal": unused_exercise_mkcal,
+                "recovery_schedule": [],
+            }
+            if unused_exercise_mkcal is not None and unused_exercise_mkcal > 0:
+                first = (unused_exercise_mkcal * RECOVERY_WEIGHTS_PERMILLE[0] + 500) // 1_000
+                second = (unused_exercise_mkcal * RECOVERY_WEIGHTS_PERMILLE[1] + 500) // 1_000
+                amounts = (first, second, unused_exercise_mkcal - first - second)
+                for offset, amount in enumerate(amounts, start=1):
+                    pending.setdefault(current_date + timedelta(days=offset), []).append(
+                        (current_date, offset, amount)
+                    )
+            current_date += timedelta(days=1)
+
+        results: dict[str, dict[str, Any]] = {}
+        current_date = start_date
+        while current_date <= end_date:
+            item = internal[current_date]
+            schedule = sorted(item["recovery_schedule"], key=lambda value: value["day_offset"])
+            scheduled_total = sum(value["scheduled_mkcal"] for value in schedule)
+            unused_exercise = item["unused_exercise_mkcal"]
+            incoming_remaining = (
+                None
+                if item["incoming_used_mkcal"] is None
+                else item["incoming_mkcal"] - item["incoming_used_mkcal"]
+            )
+            results[current_date.isoformat()] = {
+                "policy_id": ENERGY_POLICY_ID,
+                "calculation_basis": "current_policy",
+                "date": current_date.isoformat(),
+                "timezone": timezone,
+                "status": item["status"],
+                "provisional": item["provisional"],
+                "base_burn_kcal": _unscale(item["base_mkcal"], 1_000),
+                "deficit_kcal": _unscale(item["deficit_mkcal"], 1_000),
+                "ordinary_target_kcal": _unscale(item["ordinary_mkcal"], 1_000),
+                "intake_kcal": _unscale(item["intake_mkcal"], 1_000),
+                "intake_complete": item["intake_complete"],
+                "reported_training_burn_kcal": _unscale(item["reported_mkcal"], 1_000),
+                "credited_training_burn_kcal": _unscale(item["credited_mkcal"], 1_000),
+                "incoming_recovery_kcal": _unscale(item["incoming_mkcal"], 1_000),
+                "incoming_recovery_used_kcal": _unscale(item["incoming_used_mkcal"], 1_000),
+                "incoming_recovery_remaining_kcal": _unscale(incoming_remaining, 1_000),
+                "incoming_recovery_expired_kcal": (
+                    _unscale(incoming_remaining, 1_000) if current_date < today else None
+                ),
+                "planned_baseline_kcal": (
+                    None
+                    if item["goal"] is None
+                    else _unscale(item["ordinary_mkcal"] + item["incoming_mkcal"], 1_000)
+                ),
+                "available_ceiling_kcal": (
+                    None
+                    if item["goal"] is None
+                    else _unscale(
+                        item["ordinary_mkcal"] + item["incoming_mkcal"] + item["credited_mkcal"],
+                        1_000,
+                    )
+                ),
+                "exercise_credit_used_kcal": _unscale(item["exercise_used_mkcal"], 1_000),
+                "unused_exercise_credit_kcal": _unscale(unused_exercise, 1_000),
+                "recovery_schedule": [
+                    {
+                        "date": value["date"].isoformat(),
+                        "day_offset": value["day_offset"],
+                        "candidate_kcal": _unscale(value["candidate_mkcal"], 1_000),
+                        "scheduled_kcal": _unscale(value["scheduled_mkcal"], 1_000),
+                        "expired_kcal": _unscale(
+                            value["candidate_mkcal"] - value["scheduled_mkcal"], 1_000
+                        ),
+                    }
+                    for value in schedule
+                ],
+                "recovery_scheduled_kcal": _unscale(scheduled_total, 1_000),
+                "exercise_credit_expired_at_creation_kcal": (
+                    None
+                    if unused_exercise is None
+                    else _unscale(unused_exercise - scheduled_total, 1_000)
+                ),
+            }
+            current_date += timedelta(days=1)
+        return results
+
+    def energy_balance(self, on_date: date, timezone: str = DEFAULT_TIMEZONE) -> dict[str, Any]:
+        return self._energy_balances(on_date, on_date, timezone)[on_date.isoformat()]
 
     def get_goals(
         self,
@@ -1168,8 +1498,9 @@ class NutritionRepository:
                 ).fetchall()
         current_goal = None if current is None else self._goal_from_row(current)
         if current_goal is not None:
-            current_goal["energy_budget"] = self._energy_budget(current_goal, effective_date)
+            current_goal["energy_budget"] = self.energy_balance(effective_date, timezone)
         return {
+            "policy_id": ENERGY_POLICY_ID,
             "on_date": effective_date.isoformat(),
             "timezone": timezone,
             "current": current_goal,

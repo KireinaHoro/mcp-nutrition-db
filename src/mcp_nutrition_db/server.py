@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 from .models import (
     DEFAULT_TIMEZONE,
     ComponentInput,
+    Confidence,
     EntryChanges,
     EntryKind,
     Estimation,
@@ -26,6 +27,8 @@ from .models import (
     QueryWindow,
     SummarizeInput,
     TrainingChanges,
+    TrainingEvidence,
+    TrainingMeasurementMethod,
     TrainingSource,
     validate_timezone,
 )
@@ -35,13 +38,17 @@ from .repository import NutritionRepository, RepositoryError
 # The SDK detects only the unparameterized runtime class for context injection.
 MCPContext = Context
 
-INSTRUCTIONS = """Use these tools as the durable nutrition record. ChatGPT interprets meal
-photos and conversation; this server validates and stores the resulting structured estimates.
+INSTRUCTIONS = """Calorie accounting distinguishes the ordinary target, incoming recovery
+allowance, and confidence-adjusted exercise allowance. An allowance is an optional ceiling, not
+a recommendation to eat it. Use server-returned energy calculations; call
+nutrition_get_energy_policy when explaining the policy or proposing a change. Use these tools as
+the durable nutrition record. ChatGPT interprets meal photos and conversation; this server
+validates and stores the resulting structured estimates.
 Use nutrition_log_entry once for a new meal, then nutrition_update_entry when the user corrects
 portions or ingredients. Preserve per-component source provenance and uncertainty. For requests
-about today, pass a relative_day window instead of calculating timestamps. Log exercise with
-nutrition_log_training; its burn increases that day's calorie target. Nutrition and exercise
-estimates are not medical advice."""
+about today, pass a relative_day window instead of calculating timestamps. Preserve training
+measurement method, evidence, and confidence. Nutrition and exercise estimates are not medical
+advice."""
 
 READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
@@ -225,9 +232,10 @@ def create_server(
     @server.tool(
         name="nutrition_log_training",
         description=(
-            "Log one training session and its estimated energy burn. Include the estimate source; "
-            "the burn is credited to the local calendar day on which training started. Exact "
-            "retries within ten minutes return the original training."
+            "Log one training session and its reported energy-burn estimate. Classify confidence "
+            "and measurement method and include supporting evidence when available. The server "
+            "preserves reported burn and calculates policy-adjusted credited burn. Exact retries "
+            "within ten minutes return the original training."
         ),
         annotations=MUTATING,
     )
@@ -235,9 +243,12 @@ def create_server(
         occurred_at: datetime,
         activity: Annotated[str, Field(min_length=1, max_length=200)],
         duration_minutes: Annotated[float, Field(gt=0, le=10_080)],
-        calories_burned_kcal: Annotated[float, Field(gt=0, le=100_000)],
+        reported_burn_kcal: Annotated[float, Field(gt=0, le=100_000)],
+        confidence: Confidence,
+        measurement_method: TrainingMeasurementMethod,
         source: TrainingSource,
         ctx: MCPContext,  # type: ignore[type-arg]
+        evidence: TrainingEvidence | None = None,
         timezone: str = default_timezone,
         notes: Annotated[str | None, Field(max_length=5_000)] = None,
         force_new: bool = False,
@@ -249,8 +260,11 @@ def create_server(
                         occurred_at=occurred_at,
                         activity=activity,
                         duration_minutes=duration_minutes,
-                        calories_burned_kcal=calories_burned_kcal,
+                        reported_burn_kcal=reported_burn_kcal,
+                        confidence=confidence,
+                        measurement_method=measurement_method,
                         source=source,
+                        evidence=evidence,
                         timezone=timezone,
                         notes=notes,
                         force_new=force_new,
@@ -277,8 +291,9 @@ def create_server(
     @server.tool(
         name="nutrition_update_training",
         description=(
-            "Correct a training's activity, timing, duration, burn estimate, or source. Supply "
-            "the last observed revision to avoid overwriting a newer correction."
+            "Correct a training's activity, timing, reported burn, confidence, measurement "
+            "method, evidence, or source. Supply the last observed revision to avoid overwriting "
+            "a newer correction. Derived credit and affected recovery days are recalculated."
         ),
         annotations=MUTATING,
     )
@@ -340,7 +355,8 @@ def create_server(
         name="nutrition_summarize",
         description=(
             "Sum nutrition over a bounded window, grouped by day or whole range. For today's "
-            "macros, use a relative_day window; resolved timestamps are returned."
+            "macros and energy balance, use a relative_day window. Energy results distinguish "
+            "ordinary target, recovery allowance, and optional exercise allowance."
         ),
         annotations=READ_ONLY,
     )
@@ -361,7 +377,7 @@ def create_server(
         name="nutrition_set_goals",
         description=(
             "Set an effective-dated base daily burn, calorie deficit, and optional macro targets. "
-            "The daily calorie target is base burn plus logged training burn minus deficit."
+            "The server derives the ordinary target and separate recovery and exercise allowances."
         ),
         annotations=MUTATING,
     )
@@ -392,8 +408,8 @@ def create_server(
     @server.tool(
         name="nutrition_get_goals",
         description=(
-            "Get the nutrition goal effective on a date. Omit on_date for today's goal; optionally "
-            "include all configured goal versions."
+            "Get the nutrition goal and server-calculated energy balance effective on a date. "
+            "Omit on_date for today; optionally include all configured goal versions."
         ),
         annotations=READ_ONLY,
     )
@@ -410,5 +426,18 @@ def create_server(
                 )
             except Exception as error:
                 raise _translate_error(error) from error
+
+    @server.tool(
+        name="nutrition_get_energy_policy",
+        description=(
+            "Return the active versioned exercise and recovery accounting policy. Call this when "
+            "explaining allowance semantics, confidence multipliers, recovery weights, caps, or "
+            "expiry; calculations in summaries and goals are already performed by the server."
+        ),
+        annotations=READ_ONLY,
+    )
+    def nutrition_get_energy_policy(ctx: MCPContext) -> dict[str, Any]:  # type: ignore[type-arg]
+        with logged_tool_call("nutrition_get_energy_policy", ctx):
+            return repository.energy_policy()
 
     return server

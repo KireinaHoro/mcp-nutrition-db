@@ -44,7 +44,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert "durable nutrition record" in (initialized.instructions or "")
 
             tools = await session.list_tools()
-            assert len(tools.tools) == 13
+            assert len(tools.tools) == 14
 
             logged = await session.call_tool(
                 "nutrition_log_entry",
@@ -107,13 +107,21 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "occurred_at": "2026-08-27T18:00:00+02:00",
                     "activity": "Cycling",
                     "duration_minutes": 60,
-                    "calories_burned_kcal": 850,
+                    "reported_burn_kcal": 850,
+                    "confidence": "high",
+                    "measurement_method": "power_meter",
                     "source": {"type": "user_provided", "detail": "Cycling computer"},
                 },
             )
             assert training.isError is False
             assert training.structuredContent is not None
-            assert training.structuredContent["calories_burned_kcal"] == 850
+            assert training.structuredContent["reported_burn_kcal"] == 850
+            assert training.structuredContent["credited_burn_kcal"] == 850
+
+            policy = await session.call_tool("nutrition_get_energy_policy", {})
+            assert policy.isError is False
+            assert policy.structuredContent is not None
+            assert policy.structuredContent["policy_id"] == "energy-credit/v1"
 
             summary = await session.call_tool(
                 "nutrition_summarize",
@@ -128,7 +136,8 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert summary.isError is False
             assert summary.structuredContent is not None
             group = summary.structuredContent["groups"][0]
-            assert group["training_burn_kcal"] == 850
-            assert group["goal_progress"]["calories_kcal"]["target"] == 2650
+            assert group["reported_training_burn_kcal"] == 850
+            assert group["credited_training_burn_kcal"] == 850
+            assert group["energy_balance"]["available_ceiling_kcal"] == 2650
 
     asyncio.run(exercise())

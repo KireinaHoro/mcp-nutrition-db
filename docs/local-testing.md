@@ -94,8 +94,9 @@ For the first end-to-end check:
 3. Query today's entries and summary without supplying RFC3339 timestamps.
 4. Correct a portion and verify the existing entry revision increases.
 5. Set and query a base burn, deficit, and macro goal.
-6. Log a training session, then verify today's calorie target increases by the
-   reported training burn.
+6. Log a training session with measurement method, confidence, and evidence;
+   verify reported and credited burn remain distinct and the exercise allowance
+   is presented as an optional ceiling.
 
 After tunnel-dependent development is finished, revoke the temporary key and
 delete `./api-key` and `./.tunnel-client/`.
