@@ -24,11 +24,19 @@ name, outcome, duration, MCP request ID, generated correlation ID, and error
 class when applicable. Arguments, results, meal notes, and credentials are not
 logged. Use `--log-level` to change the default `info` threshold.
 
-The committed `.codex/config.toml` registers that endpoint as the optional
-`nutrition` MCP server and asks for approval only for writes. Codex reads MCP
-configuration when a client session starts, so open a new Codex session from
-this trusted repository after the service is listening. An already-running
-session does not dynamically acquire the new tools.
+The committed `.codex/config.toml` targets the production OpenAI-hosted tunnel.
+To point a new Codex session at this local server instead, start it with a
+project-local configuration override after the service is listening:
+
+```console
+codex -c 'mcp_servers.nutrition.url="http://127.0.0.1:8787/mcp"' \
+  -c 'mcp_servers.nutrition.auth="oauth"'
+```
+
+The local endpoint has no credentials, so Codex falls back to an unauthenticated
+connection after finding no configured OAuth credential. Codex reads MCP
+configuration when a client session starts; an already-running session does not
+dynamically acquire or replace tools.
 
 ChatGPT Web does not read `.codex/config.toml`; it reaches the same local server
 through Secure MCP Tunnel instead.

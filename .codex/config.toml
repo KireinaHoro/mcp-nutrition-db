@@ -1,6 +1,7 @@
 [mcp_servers.nutrition]
-url = "http://127.0.0.1:8787/mcp"
+url = "https://api.openai.com/v1/tunnel/tunnel_6a8ff61e7dc4819193358c364649f9c9"
+auth = "chatgpt"
 required = false
 startup_timeout_sec = 10
 tool_timeout_sec = 60
-default_tools_approval_mode = "writes"
+default_tools_approval_mode = "prompt"

@@ -54,7 +54,7 @@ from images are estimates and must remain identifiable as such.
 ## 3. Architecture
 
 ```text
-ChatGPT
+ChatGPT / Codex
    |
    | MCP via OpenAI-hosted tunnel endpoint
    v
