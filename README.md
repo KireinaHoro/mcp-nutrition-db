@@ -15,6 +15,9 @@ so it does not require an nginx route or a public MCP endpoint.
   model, security model, and NixOS deployment.
 - [Implementation plan](docs/implementation-plan.md) is the source of truth for
   phases, acceptance criteria, progress, and deferred work.
+- [Exercise and recovery energy-credit policy](docs/energy-credit-policy.md)
+  defines confidence-adjusted training allowance, non-recurring recovery-day
+  credits, and how that policy should be presented over MCP.
 - [Local testing](docs/local-testing.md) explains direct Codex attachment and
   the temporary Secure MCP Tunnel workflow for ChatGPT Web.
 

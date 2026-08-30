@@ -272,6 +272,13 @@ a second independent target:
 The deficit must be non-negative and lower than the base burn. Training burn is
 the sum of active training records assigned to the requested local date.
 
+This is the currently implemented first model. The accepted replacement is the
+versioned [exercise and recovery energy-credit policy](energy-credit-policy.md),
+which preserves reported burn, applies an explicit confidence multiplier,
+distinguishes an optional exercise allowance from the ordinary target, and can
+schedule bounded non-recurring recovery allowances. Until a release declares
+that policy ID, production results retain the first-model semantics above.
+
 Goals are effective-dated, not mutated in place, so historical summaries use
 the goal that applied on that day. Setting the same effective date replaces
 that version in one transaction and records the change.
@@ -588,3 +595,4 @@ parallel.
 | 2026-08-27 | Replace required caller idempotency keys with short-lived server-side exact-replay detection. | Normal LLM calls are simpler while lost-response retries remain safe. |
 | 2026-08-27 | Require nutrition provenance on every component. | Estimates, labels, restaurant declarations, and other sources remain distinguishable. |
 | 2026-08-27 | Derive calories from base burn plus training burn minus deficit. | Training corrections automatically change the relevant day's intake budget without rewriting goals. |
+| 2026-08-30 | Adopt the versioned `energy-credit/v1` policy as the replacement energy model. | Confidence-adjusted exercise is an optional allowance; sufficiently large unused credit can create capped, non-recurring allowances over the next three days. |
