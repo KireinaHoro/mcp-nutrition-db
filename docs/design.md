@@ -54,7 +54,7 @@ from images are estimates and must remain identifiable as such.
 ## 3. Architecture
 
 ```text
-ChatGPT / Codex
+ChatGPT
    |
    | MCP via OpenAI-hosted tunnel endpoint
    v
@@ -81,6 +81,11 @@ rule, nginx location, public UUID path, or TLS certificate is needed for MCP.
 as a private/developer-mode connection for ChatGPT and other supported OpenAI
 products. It is not a route for publishing a public plugin; that would require
 a stable public HTTPS endpoint and a separate authentication design.
+
+Local Codex MCP clients cannot POST MCP messages directly to the tunnel control
+plane URL. The project-scoped Codex configuration therefore remains attached
+to the local development server and database; production access is through a
+supported OpenAI tunnel surface such as the configured ChatGPT app.
 
 ## 4. Technology choices
 
