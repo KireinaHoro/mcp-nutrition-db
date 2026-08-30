@@ -1,9 +1,9 @@
 # Exercise and recovery energy-credit policy
 
-- Policy ID: `energy-credit/v1`
+- Policy ID: `energy-credit/v2`
 - Status: Active in production (schema v3)
-- Accepted: 2026-08-30
-- Last revised: 2026-08-30
+- Accepted: 2026-08-31
+- Last revised: 2026-08-31
 - Applies when: a release that declares this policy ID is deployed
 
 ## 1. Purpose
@@ -112,16 +112,26 @@ optional exercise allowance.
 
 ## 5. Scheduling recovery allowance
 
-Recovery scheduling uses the confidence-adjusted, unused same-day exercise
-credit calculated above.
+Recovery scheduling first limits the confidence-adjusted, unused same-day
+exercise credit to a recoverable pool. The pool cap is the next local day's
+planned deficit divided by the first-day recovery weight:
 
-1. Calculate three independent candidate allocations from all positive
-   `unused_exercise_credit`:
+```text
+recovery_pool_cap[d] = planned_deficit[d + 1] / 0.50
+recovery_pool[d] = min(unused_exercise_credit[d], recovery_pool_cap[d])
+```
+
+With a 500 kcal next-day deficit, at most 1,000 kcal enters the recovery pool.
+Credit above the pool cap expires instead of flattening all three recovery days
+at their individual caps. If the next day has no active goal or a zero deficit,
+the pool cap is zero.
+
+1. Split the recoverable pool into three candidate allocations:
    - next local day: `50%`;
    - two local days later: `30%`;
    - three local days later: `20%`.
-2. Cap each candidate independently at that destination day's planned deficit.
-   Under the current 500 kcal deficit, this is a 500 kcal daily cap.
+2. Cap the aggregate incoming candidates at each destination day's planned
+   deficit. Under the current 500 kcal deficit, this is a 500 kcal daily cap.
 3. Any amount clipped by a daily cap expires. It is not redistributed to a
    later day.
 4. Any scheduled amount not consumed on its destination day expires. It does
@@ -133,31 +143,33 @@ and their sum exceeds its cap, reduce those candidates proportionally to fit;
 the clipped portions expire. This keeps the result independent of processing
 order and prevents consecutive large exercise days from multiplying the cap.
 
-For each source day with positive unused exercise credit, offsets `n = 1, 2, 3`
-have weights `0.50`, `0.30`, and `0.20`. For each destination day `t`:
+For each source day with a positive recovery pool, offsets `n = 1, 2, 3` have
+weights `0.50`, `0.30`, and `0.20`. For each destination day `t`:
 
 ```text
-candidate[d, n] = unused_exercise_credit[d] * weight[n]
+recovery_pool_cap[d] = planned_deficit[d + 1] / weight[1]
+recovery_pool[d] = min(unused_exercise_credit[d], recovery_pool_cap[d])
+candidate[d, n] = recovery_pool[d] * weight[n]
 raw_incoming[t] = sum(candidate[d, n] where d + n = t)
 incoming_recovery[t] = min(raw_incoming[t], planned_deficit[t])
 
 if raw_incoming[t] > 0:
   scheduled[d, n] = candidate[d, n] * incoming_recovery[t] / raw_incoming[t]
 
+excluded_from_recovery[d] = unused_exercise_credit[d] - recovery_pool[d]
 expired_at_creation[d] = unused_exercise_credit[d] - sum(scheduled[d, n])
 ```
 
-Every positive amount of unused exercise credit is distributed according to
-the weights above. Zero unused credit produces no recovery allowance.
+Zero unused credit or a zero recovery pool produces no recovery allowance.
 
 ## 6. Worked examples
 
 ### 1,200 kcal unused credit at high confidence
 
-The 1,200 kcal is already confidence-adjusted. Candidate allocations are
-600/360/240 kcal. The next-day candidate is capped at 500 kcal, so the applied
-schedule is 500/360/240 kcal and 100 kcal expires. The overflow is not moved to
-days two or three.
+The 1,200 kcal is already confidence-adjusted. With a 500 kcal next-day deficit,
+the recovery pool is capped at 1,000 kcal. Candidate allocations are therefore
+500/300/200 kcal and 200 kcal is excluded from recovery. The overflow is not
+moved to days two or three.
 
 ### 1,200 kcal reported unused burn at medium confidence
 
@@ -175,9 +187,18 @@ exercise_credit_used = 2455.94 - 2000 = 455.94
 unused_exercise_credit = 3133.60 - 455.94 = 2677.66
 ```
 
-The candidates are 1,338.83/803.30/535.53 kcal. With a 500 kcal planned
-deficit on each destination day, the schedule is 500/500/500 kcal and
-1,177.66 kcal expires.
+The recovery pool is capped at 1,000 kcal by the next day's 500 kcal deficit.
+Before collisions with other source days, the schedule is therefore
+500/300/200 kcal and 1,677.66 kcal is excluded from recovery. This preserves a
+diminishing recovery profile instead of producing three saturated days.
+
+### Consecutive large days
+
+If Sunday produces 500/300/200 kcal and another large ride on Monday produces
+500/300/200 kcal, Tuesday receives candidates of 300 kcal from Sunday and
+500 kcal from Monday. The aggregate 800 kcal is capped at Tuesday's 500 kcal
+planned deficit. Proportional collision handling attributes 187.5 kcal to
+Sunday and 312.5 kcal to Monday; the other 300 kcal expires.
 
 ## 7. Versioning and recalculation
 
@@ -220,10 +241,12 @@ For example:
 
 ```json
 {
-  "policy_id": "energy-credit/v1",
+  "policy_id": "energy-credit/v2",
   "status": "active",
   "confidence_multipliers": {"high": 1.0, "medium": 0.8, "low": 0.6},
   "recovery_weights": [0.5, 0.3, 0.2],
+  "recovery_pool_cap": "next_day_planned_deficit / first_recovery_weight",
+  "recovery_pool_overflow": "expire",
   "daily_cap": "destination_planned_deficit",
   "overflow": "expire",
   "missed_allocation": "expire",
@@ -257,3 +280,11 @@ Suggested leading server instruction:
 > optional ceiling, not a recommendation to eat it. Use server-returned energy
 > calculations; call `nutrition_get_energy_policy` when explaining the policy
 > or proposing a change.
+
+## 9. Version history
+
+- `energy-credit/v2` caps the source recovery pool before applying the
+  50%/30%/20% split, preserving a diminishing profile on isolated large days.
+- `energy-credit/v1` split all unused credited exercise before independently
+  clipping destination days, which could flatten or invert the displayed
+  source-day schedule when candidates saturated several caps.

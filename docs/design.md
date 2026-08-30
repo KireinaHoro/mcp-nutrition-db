@@ -605,3 +605,4 @@ parallel.
 | 2026-08-27 | Require nutrition provenance on every component. | Estimates, labels, restaurant declarations, and other sources remain distinguishable. |
 | 2026-08-27 | Initial release derived calories from base burn plus training burn minus deficit. | This behavior is superseded by `energy-credit/v1`. |
 | 2026-08-30 | Adopt the versioned `energy-credit/v1` policy as the replacement energy model. | Confidence-adjusted exercise is an optional allowance; sufficiently large unused credit can create capped, non-recurring allowances over the next three days. |
+| 2026-08-31 | Replace v1 recovery scheduling with `energy-credit/v2`. | Cap the recoverable source pool before its 50%/30%/20% split, preserving a taper for isolated large days while retaining proportional destination collisions. |

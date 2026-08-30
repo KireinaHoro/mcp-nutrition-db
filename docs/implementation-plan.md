@@ -132,6 +132,7 @@ Acceptance criteria:
 - [x] Incoming recovery is consumed before same-day exercise allowance and
   cannot recursively create recovery credit.
 - [x] Every positive amount of unused credited exercise is weighted
+  into a recoverable pool capped from the next-day deficit, then weighted
   50%/30%/20% over the next three days.
 - [x] Each destination is independently capped at its planned deficit; clipped
   overflow and missed allocations expire without redistribution. Colliding
@@ -317,3 +318,4 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-08-30 | 0, 3A | Accepted and documented `energy-credit/v1`: confidence-adjusted exercise allowance, bounded non-recurring recovery credits, explicit MCP presentation, and an implementation checklist. | `docs/energy-credit-policy.md`; design decision log |
 | 2026-08-30 | 2–4, 3A | Implemented schema v3 training provenance and the derived `energy-credit/v1` ledger, added the policy tool and MCP guidance, migrated a production snapshot successfully, and covered confidence, recovery, collision, correction, incomplete-intake, stdio, and Streamable HTTP behavior. | 29 tests; full flake check; migrated-copy `PRAGMA quick_check` |
 | 2026-08-30 | 3A, 6–8 | Deployed schema v3 and `energy-credit/v1` to `kage`; verified both units, schema health, MCP initialization, all fourteen tools, the policy response, and today's production ledger. Audited the four migrated training records into explicit device, HR/GPS, or power-meter evidence and created a fresh incremental backup. | App commit `a5595f4`; flakes commit `a13bda0`; production MCP and systemd evidence |
+| 2026-08-31 | 3A | Accepted `energy-credit/v2`: cap the source recovery pool before its 50%/30%/20% split so an isolated large day tapers instead of saturating all three destination caps. Consecutive large days still share each destination cap proportionally. | Policy review and production-shaped regression fixture |

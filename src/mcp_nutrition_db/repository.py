@@ -41,7 +41,7 @@ NUTRIENTS: dict[str, tuple[str, int]] = {
 
 SCHEMA_VERSION = 3
 CREATE_RETRY_WINDOW = timedelta(minutes=10)
-ENERGY_POLICY_ID = "energy-credit/v1"
+ENERGY_POLICY_ID = "energy-credit/v2"
 CONFIDENCE_MULTIPLIERS_PERMILLE = {"high": 1_000, "medium": 800, "low": 600}
 RECOVERY_WEIGHTS_PERMILLE = (500, 300, 200)
 
@@ -1213,6 +1213,8 @@ class NutritionRepository:
             "calculation_basis": "current_policy",
             "confidence_multipliers": {"high": 1.0, "medium": 0.8, "low": 0.6},
             "recovery_weights": [0.5, 0.3, 0.2],
+            "recovery_pool_cap": "next_day_planned_deficit / first_recovery_weight",
+            "recovery_pool_overflow": "expire",
             "daily_cap": "destination_planned_deficit",
             "collision_handling": "proportional",
             "overflow": "expire",
@@ -1316,13 +1318,20 @@ class NutritionRepository:
             trainings_by_day.setdefault(local_date, []).append(row)
 
         goals_by_date = {date.fromisoformat(row["effective_from"]): row for row in goal_rows}
+        active_goals_by_date: dict[date, sqlite3.Row | None] = {}
         active_goal: sqlite3.Row | None = None
+        goal_date = scan_start
+        while goal_date <= scan_end:
+            if goal_date in goals_by_date:
+                active_goal = goals_by_date[goal_date]
+            active_goals_by_date[goal_date] = active_goal
+            goal_date += timedelta(days=1)
+
         pending: dict[date, list[tuple[date, int, int]]] = {}
         internal: dict[date, dict[str, Any]] = {}
         current_date = scan_start
         while current_date <= scan_end:
-            if current_date in goals_by_date:
-                active_goal = goals_by_date[current_date]
+            active_goal = active_goals_by_date[current_date]
             goal = None if active_goal is None else self._goal_from_row(active_goal)
             base_mkcal = 0 if active_goal is None else int(active_goal["base_burn_mkcal"])
             deficit_mkcal = 0 if active_goal is None else int(active_goal["deficit_mkcal"])
@@ -1360,6 +1369,8 @@ class NutritionRepository:
             exercise_used_mkcal: int | None = None
             unused_exercise_mkcal: int | None = None
             incoming_used_mkcal: int | None = None
+            recovery_pool_cap_mkcal: int | None = None
+            recovery_pool_mkcal: int | None = None
             if goal is None:
                 status = "no_goal"
             elif not intake_complete:
@@ -1371,6 +1382,10 @@ class NutritionRepository:
                     credited_mkcal,
                 )
                 unused_exercise_mkcal = credited_mkcal - exercise_used_mkcal
+                next_goal = active_goals_by_date.get(current_date + timedelta(days=1))
+                next_deficit_mkcal = 0 if next_goal is None else int(next_goal["deficit_mkcal"])
+                recovery_pool_cap_mkcal = next_deficit_mkcal * 1_000 // RECOVERY_WEIGHTS_PERMILLE[0]
+                recovery_pool_mkcal = min(unused_exercise_mkcal, recovery_pool_cap_mkcal)
 
             internal[current_date] = {
                 "date": current_date,
@@ -1388,12 +1403,14 @@ class NutritionRepository:
                 "incoming_used_mkcal": incoming_used_mkcal,
                 "exercise_used_mkcal": exercise_used_mkcal,
                 "unused_exercise_mkcal": unused_exercise_mkcal,
+                "recovery_pool_cap_mkcal": recovery_pool_cap_mkcal,
+                "recovery_pool_mkcal": recovery_pool_mkcal,
                 "recovery_schedule": [],
             }
-            if unused_exercise_mkcal is not None and unused_exercise_mkcal > 0:
-                first = (unused_exercise_mkcal * RECOVERY_WEIGHTS_PERMILLE[0] + 500) // 1_000
-                second = (unused_exercise_mkcal * RECOVERY_WEIGHTS_PERMILLE[1] + 500) // 1_000
-                amounts = (first, second, unused_exercise_mkcal - first - second)
+            if recovery_pool_mkcal is not None and recovery_pool_mkcal > 0:
+                first = (recovery_pool_mkcal * RECOVERY_WEIGHTS_PERMILLE[0] + 500) // 1_000
+                second = (recovery_pool_mkcal * RECOVERY_WEIGHTS_PERMILLE[1] + 500) // 1_000
+                amounts = (first, second, recovery_pool_mkcal - first - second)
                 for offset, amount in enumerate(amounts, start=1):
                     pending.setdefault(current_date + timedelta(days=offset), []).append(
                         (current_date, offset, amount)
@@ -1407,6 +1424,7 @@ class NutritionRepository:
             schedule = sorted(item["recovery_schedule"], key=lambda value: value["day_offset"])
             scheduled_total = sum(value["scheduled_mkcal"] for value in schedule)
             unused_exercise = item["unused_exercise_mkcal"]
+            recovery_pool = item["recovery_pool_mkcal"]
             incoming_remaining = (
                 None
                 if item["incoming_used_mkcal"] is None
@@ -1447,6 +1465,13 @@ class NutritionRepository:
                 ),
                 "exercise_credit_used_kcal": _unscale(item["exercise_used_mkcal"], 1_000),
                 "unused_exercise_credit_kcal": _unscale(unused_exercise, 1_000),
+                "recovery_pool_cap_kcal": _unscale(item["recovery_pool_cap_mkcal"], 1_000),
+                "recovery_pool_kcal": _unscale(recovery_pool, 1_000),
+                "exercise_credit_excluded_from_recovery_kcal": (
+                    None
+                    if unused_exercise is None or recovery_pool is None
+                    else _unscale(unused_exercise - recovery_pool, 1_000)
+                ),
                 "recovery_schedule": [
                     {
                         "date": value["date"].isoformat(),
@@ -1460,6 +1485,11 @@ class NutritionRepository:
                     for value in schedule
                 ],
                 "recovery_scheduled_kcal": _unscale(scheduled_total, 1_000),
+                "recovery_pool_expired_at_creation_kcal": (
+                    None
+                    if recovery_pool is None
+                    else _unscale(recovery_pool - scheduled_total, 1_000)
+                ),
                 "exercise_credit_expired_at_creation_kcal": (
                     None
                     if unused_exercise is None

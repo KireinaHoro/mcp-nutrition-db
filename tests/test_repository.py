@@ -81,7 +81,7 @@ def test_v1_goal_migrates_calorie_target_to_base_burn(tmp_path: Path) -> None:
     assert goal["base_burn_kcal"] == 2_000
     assert goal["targets"]["calories_kcal"] is None
     assert goal["energy_budget"]["ordinary_target_kcal"] == 2_000
-    assert goal["energy_budget"]["policy_id"] == "energy-credit/v1"
+    assert goal["energy_budget"]["policy_id"] == "energy-credit/v2"
 
 
 def test_v2_training_migrates_with_conservative_provenance(tmp_path: Path) -> None:
@@ -314,7 +314,7 @@ def test_training_crud_and_dynamic_calorie_budget(
     assert [
         item["scheduled_kcal"]
         for item in repository.energy_balance(date(2026, 8, 27))["recovery_schedule"]
-    ] == [400, 255, 170]
+    ] == [400, 240, 160]
     updated = repository.update_training(
         created["training_id"],
         1,
@@ -325,7 +325,7 @@ def test_training_crud_and_dynamic_calorie_budget(
     assert [
         item["scheduled_kcal"]
         for item in repository.energy_balance(date(2026, 8, 27))["recovery_schedule"]
-    ] == [400, 270, 180]
+    ] == [400, 240, 160]
     assert (
         repository.training_revision_history(created["training_id"])[0]["snapshot"][
             "reported_burn_kcal"
@@ -377,7 +377,7 @@ def test_confidence_adjustment_and_recovery_weights(repository: NutritionReposit
     )
 
     balance = repository.energy_balance(date(2026, 8, 27))
-    assert balance["policy_id"] == "energy-credit/v1"
+    assert balance["policy_id"] == "energy-credit/v2"
     assert balance["reported_training_burn_kcal"] == 1_200
     assert balance["credited_training_burn_kcal"] == 960
     assert balance["unused_exercise_credit_kcal"] == 960
@@ -388,6 +388,81 @@ def test_confidence_adjustment_and_recovery_weights(repository: NutritionReposit
     ]
     assert balance["exercise_credit_expired_at_creation_kcal"] == 0
     assert repository.energy_balance(date(2026, 8, 28))["incoming_recovery_kcal"] == 480
+
+
+def test_large_credit_caps_pool_before_tapering(repository: NutritionRepository) -> None:
+    repository.set_goals(
+        GoalInput(
+            effective_from=date(2026, 8, 1),
+            base_burn_kcal=2_500,
+            deficit_kcal=500,
+            reason="Large recovery fixture",
+        )
+    )
+    repository.create_training(
+        LogTrainingInput(
+            occurred_at=datetime.fromisoformat("2026-08-27T08:00:00+02:00"),
+            activity="Long power-meter ride",
+            duration_minutes=300,
+            reported_burn_kcal=2_800,
+            confidence="high",
+            measurement_method="power_meter",
+            source=TrainingSource(type="wearable", detail="Power meter"),
+        )
+    )
+
+    balance = repository.energy_balance(date(2026, 8, 27))
+    assert balance["unused_exercise_credit_kcal"] == 2_800
+    assert balance["recovery_pool_cap_kcal"] == 1_000
+    assert balance["recovery_pool_kcal"] == 1_000
+    assert balance["exercise_credit_excluded_from_recovery_kcal"] == 1_800
+    assert [item["scheduled_kcal"] for item in balance["recovery_schedule"]] == [
+        500,
+        300,
+        200,
+    ]
+    assert balance["recovery_pool_expired_at_creation_kcal"] == 0
+    assert balance["exercise_credit_expired_at_creation_kcal"] == 1_800
+
+
+def test_recovery_pool_uses_next_days_effective_deficit(
+    repository: NutritionRepository,
+) -> None:
+    repository.set_goals(
+        GoalInput(
+            effective_from=date(2026, 8, 1),
+            base_burn_kcal=2_500,
+            deficit_kcal=500,
+            reason="Initial deficit",
+        )
+    )
+    repository.set_goals(
+        GoalInput(
+            effective_from=date(2026, 8, 28),
+            base_burn_kcal=2_500,
+            deficit_kcal=300,
+            reason="Smaller deficit from tomorrow",
+        )
+    )
+    repository.create_training(
+        LogTrainingInput(
+            occurred_at=datetime.fromisoformat("2026-08-27T08:00:00+02:00"),
+            activity="Long power-meter ride",
+            duration_minutes=300,
+            reported_burn_kcal=2_000,
+            confidence="high",
+            measurement_method="power_meter",
+            source=TrainingSource(type="wearable", detail="Power meter"),
+        )
+    )
+
+    balance = repository.energy_balance(date(2026, 8, 27))
+    assert balance["recovery_pool_cap_kcal"] == 600
+    assert [item["scheduled_kcal"] for item in balance["recovery_schedule"]] == [
+        300,
+        180,
+        120,
+    ]
 
 
 def test_all_confidence_multipliers_are_explicit(repository: NutritionRepository) -> None:
@@ -478,6 +553,57 @@ def test_incoming_recovery_precedes_exercise_and_collisions_share_cap(
     assert day_three["candidate_kcal"] == 300
     assert day_three["scheduled_kcal"] == 187.5
     assert repository.energy_balance(date(2026, 8, 29))["incoming_recovery_kcal"] == 500
+
+
+def test_large_day_tapers_after_prior_training_collisions(
+    repository: NutritionRepository,
+) -> None:
+    repository.set_goals(
+        GoalInput(
+            effective_from=date(2026, 8, 1),
+            base_burn_kcal=2_500,
+            deficit_kcal=500,
+            reason="Production-shaped recovery fixture",
+        )
+    )
+    fixtures = [
+        (date(2026, 8, 28), 425, "high", 2_140.45),
+        (date(2026, 8, 29), 937, "high", 3_015.7),
+        (date(2026, 8, 30), 3_917, "medium", 2_455.94),
+    ]
+    for on_date, burn, confidence, intake in fixtures:
+        repository.create_training(
+            LogTrainingInput(
+                occurred_at=datetime.fromisoformat(f"{on_date.isoformat()}T08:00:00+02:00"),
+                activity="Production-shaped training",
+                duration_minutes=300,
+                reported_burn_kcal=burn,
+                confidence=confidence,
+                measurement_method=(
+                    "power_meter" if confidence == "high" else "heart_rate_gps_model"
+                ),
+                source=TrainingSource(type="wearable", detail="Test fixture"),
+            )
+        )
+        repository.create_entry(calorie_entry(on_date, intake))
+
+    large_day = repository.energy_balance(date(2026, 8, 30))
+    assert large_day["unused_exercise_credit_kcal"] == 2_794.813
+    assert large_day["recovery_pool_kcal"] == 1_000
+    assert [item["candidate_kcal"] for item in large_day["recovery_schedule"]] == [
+        500,
+        300,
+        200,
+    ]
+    assert [item["scheduled_kcal"] for item in large_day["recovery_schedule"]] == [
+        434.041,
+        300,
+        200,
+    ]
+    assert [
+        repository.energy_balance(on_date)["incoming_recovery_kcal"]
+        for on_date in (date(2026, 8, 31), date(2026, 9, 1), date(2026, 9, 2))
+    ] == [500, 312.714, 200]
 
 
 def test_incomplete_calorie_data_does_not_create_recovery_credit(

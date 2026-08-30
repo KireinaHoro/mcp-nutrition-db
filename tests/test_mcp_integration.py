@@ -121,7 +121,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             policy = await session.call_tool("nutrition_get_energy_policy", {})
             assert policy.isError is False
             assert policy.structuredContent is not None
-            assert policy.structuredContent["policy_id"] == "energy-credit/v1"
+            assert policy.structuredContent["policy_id"] == "energy-credit/v2"
 
             summary = await session.call_tool(
                 "nutrition_summarize",

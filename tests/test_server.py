@@ -101,6 +101,10 @@ def test_streamable_http_initializes_and_calls_policy(
                 },
             )
             assert policy.status_code == 200
-            assert policy.json()["result"]["structuredContent"]["policy_id"] == "energy-credit/v1"
+            structured = policy.json()["result"]["structuredContent"]
+            assert structured["policy_id"] == "energy-credit/v2"
+            assert structured["recovery_pool_cap"] == (
+                "next_day_planned_deficit / first_recovery_weight"
+            )
 
     asyncio.run(exercise())
