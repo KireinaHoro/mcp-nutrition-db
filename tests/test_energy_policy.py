@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from mcp_nutrition_db.models import (
-    DayReviewInput,
+    ActivityPlanInput,
     EntryChanges,
     GoalInput,
     LogEntryInput,
@@ -50,17 +50,6 @@ def food(repo: NutritionRepository, day: str, kcal: float, title: str = "Meal") 
                     }
                 ],
             }
-        )
-    )
-
-
-def complete(repo: NutritionRepository, day: str, **kwargs: Any) -> None:
-    repo.review_day(
-        DayReviewInput(
-            on_date=date.fromisoformat(day),
-            intake_complete=True,
-            reason="User confirms all intake",
-            **kwargs,
         )
     )
 
@@ -112,7 +101,6 @@ def test_repeated_overshoots_extend_duration_without_stacking_or_questions(
 ) -> None:
     for day, kcal in [("2026-09-09", 5300), ("2026-09-10", 3200), ("2026-09-11", 3500)]:
         food(repo, day, kcal, "Travel meal")
-        complete(repo, day)
     result = balance(repo, "2026-09-12")
     assert result["debit"]["opening_kcal"] == 4500
     assert result["debit"]["projected_eligible_days"] == 23
@@ -120,11 +108,10 @@ def test_repeated_overshoots_extend_duration_without_stacking_or_questions(
     assert result["planned_baseline_kcal"] == 1800
     assert result["debit"]["pause_reasons"] == []
     food(repo, "2026-09-12", 1800)
-    complete(repo, "2026-09-12")
     assert balance(repo, "2026-09-12")["debit"]["closing_kcal"] == 4300
 
 
-def test_meal_details_do_not_change_accounting_and_reviews_are_audited(
+def test_meal_details_do_not_change_accounting(
     repo: NutritionRepository,
 ) -> None:
     entry = food(repo, "2026-09-09", 5300, "Inflight meal; away for two weeks")
@@ -136,21 +123,14 @@ def test_meal_details_do_not_change_accounting_and_reviews_are_audited(
         changes=EntryChanges(title="Dinner at home"),
     )
     assert balance(repo, "2026-09-10") == initial
-    complete(repo, "2026-09-09")
-    assert repo.get_day_review(date(2026, 9, 9))["day_review"]["revision"] == 1
-    with sqlite3.connect(repo.database_path) as connection:
-        assert connection.execute("SELECT count(*) FROM day_review_revisions").fetchone()[0] == 1
 
 
 def test_actual_repayment_not_target_or_ordinary_deficit_and_no_expiry(
     repo: NutritionRepository,
 ) -> None:
     food(repo, "2026-09-09", 5300)
-    complete(repo, "2026-09-09")
     food(repo, "2026-09-10", 2000)
-    complete(repo, "2026-09-10")
     food(repo, "2026-09-11", 1800)
-    complete(repo, "2026-09-11")
     assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 0
     result = balance(repo, "2026-09-11")
     assert result["planned_baseline_kcal"] == 1800
@@ -162,27 +142,88 @@ def test_actual_repayment_not_target_or_ordinary_deficit_and_no_expiry(
     assert balance(repo, "2026-09-11") == result
 
 
-def test_missing_or_partial_intake_never_repays_and_reviews_can_reopen(
-    repo: NutritionRepository,
-) -> None:
+def test_local_midnight_settles_without_event_or_confirmation(repo: NutritionRepository) -> None:
     food(repo, "2026-09-09", 5300)
     food(repo, "2026-09-10", 1800)
-    assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 0
-    complete(repo, "2026-09-10")
-    assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 200
-    repo.review_day(
-        DayReviewInput(
+    repo.clock = lambda: datetime(2026, 9, 10, 21, 59, 59, tzinfo=UTC)
+    result = balance(repo, "2026-09-10")
+    assert result["day_closed"] is False
+    assert result["intake_settled"] is False
+    assert result["debit"]["repaid_kcal"] == 0
+    repo.clock = lambda: datetime(2026, 9, 10, 22, tzinfo=UTC)
+    result = balance(repo, "2026-09-10")
+    assert result["day_closed"] is True
+    assert result["intake_settled"] is True
+    assert result["debit"]["repaid_kcal"] == 200
+    assert result["debit"]["unsettled_dates"] == []
+    assert result["debit"]["balance_provisional"] is False
+
+
+def test_backdated_meals_edits_moves_and_deletions_recalculate(repo: NutritionRepository) -> None:
+    food(repo, "2026-09-09", 5300)
+    food(repo, "2026-09-10", 1800)
+    food(repo, "2026-09-11", 1800)
+    assert balance(repo, "2026-09-12")["debit"]["opening_kcal"] == 2400
+    late = food(repo, "2026-09-10", 400)
+    assert balance(repo, "2026-09-12")["debit"]["opening_kcal"] == 2600
+    repo.update_entry(
+        late["entry_id"],
+        expected_revision=1,
+        reason="Correct amount",
+        changes=EntryChanges.model_validate(
+            {
+                "components": [
+                    {
+                        "name": "Food",
+                        "source": {"type": "user_provided"},
+                        "nutrition": {"calories_kcal": 1000},
+                    }
+                ]
+            }
+        ),
+    )
+    assert balance(repo, "2026-09-12")["debit"]["opening_kcal"] == 2900
+    repo.update_entry(
+        late["entry_id"],
+        expected_revision=2,
+        reason="Correct date",
+        changes=EntryChanges(occurred_at=datetime.fromisoformat("2026-09-09T18:00:00+02:00")),
+    )
+    assert balance(repo, "2026-09-12")["debit"]["opening_kcal"] == 3400
+    repo.delete_entry(late["entry_id"], expected_revision=3, reason="Duplicate")
+    assert balance(repo, "2026-09-12")["debit"]["opening_kcal"] == 2400
+
+
+def test_legacy_confirmation_cannot_settle_empty_day(repo: NutritionRepository) -> None:
+    food(repo, "2026-09-09", 5300)
+    repo.set_activity_plan(
+        ActivityPlanInput(
             on_date=date(2026, 9, 10),
-            intake_complete=False,
-            expected_revision=1,
-            reason="More food to log",
+            exceptional_activity=False,
+            reason="No planned activity",
         )
     )
-    assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 0
+    with sqlite3.connect(repo.database_path) as connection:
+        connection.execute("UPDATE day_reviews SET intake_complete = 1")
+    empty = balance(repo, "2026-09-10")
+    assert empty["debit"]["repaid_kcal"] == 0
+    assert empty["intake_logged"] is False
+    food(repo, "2026-09-10", 1800)
+    with sqlite3.connect(repo.database_path) as connection:
+        connection.execute("UPDATE day_reviews SET intake_complete = 0")
+    assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 200
+    plan = repo.get_activity_plan(date(2026, 9, 10))["activity_plan"]
+    assert "intake_complete" not in plan
     with pytest.raises(RevisionConflictError):
-        complete(repo, "2026-09-10")
-    with pytest.raises(ValueError, match="future"):
-        complete(repo, "2026-10-02")
+        repo.set_activity_plan(
+            ActivityPlanInput(
+                on_date=date(2026, 9, 10),
+                exceptional_activity=True,
+                reason="Stale change",
+            )
+        )
+    with sqlite3.connect(repo.database_path) as connection:
+        assert connection.execute("SELECT count(*) FROM day_review_revisions").fetchone()[0] == 1
 
 
 def test_hike_reserves_recovery_before_repaying_and_pauses_restriction(
@@ -191,7 +232,6 @@ def test_hike_reserves_recovery_before_repaying_and_pauses_restriction(
     food(repo, "2026-09-09", 5300)
     food(repo, "2026-09-12", 2455.94)
     training(repo, "2026-09-12")
-    complete(repo, "2026-09-12")
     result = balance(repo, "2026-09-12")
     assert result["credited_training_burn_kcal"] == 3133.6
     assert result["debit"]["additional_deficit_kcal"] == 0
@@ -215,7 +255,6 @@ def test_recovery_cannot_repay_debit_twice_and_clipped_reserve_expires(
     for day in ["2026-09-12", "2026-09-13"]:
         training(repo, day)
         food(repo, day, 2455.94)
-        complete(repo, day)
     hike = balance(repo, "2026-09-12")
     assert hike["debit"]["repaid_kcal"] == 1677.66
     assert hike["recovery_pool_expired_at_creation_kcal"] > 0
@@ -230,7 +269,6 @@ def test_recovery_cannot_repay_debit_twice_and_clipped_reserve_expires(
         )
     # Spending a protected allowance cannot recreate debit or repay it merely by expiring it.
     food(repo, "2026-09-14", 2500)
-    complete(repo, "2026-09-14")
     assert balance(repo, "2026-09-14")["debit"]["added_kcal"] == 0
     assert balance(repo, "2026-09-14")["debit"]["repaid_kcal"] == 0
 
@@ -239,7 +277,6 @@ def test_ordinary_exercise_pays_debit_before_carryover(repo: NutritionRepository
     food(repo, "2026-09-09", 2700)
     training(repo, "2026-09-10", 600, 60, "high")
     food(repo, "2026-09-10", 2000)
-    complete(repo, "2026-09-10")
     result = balance(repo, "2026-09-10")
     assert result["debit"]["repaid_kcal"] == 200
     assert result["debit"]["closing_kcal"] == 0
@@ -254,7 +291,6 @@ def test_corrections_recalculate_future_debit_and_protected_recovery(
     entry = food(repo, "2026-09-09", 5300)
     hike = training(repo, "2026-09-12")
     food(repo, "2026-09-12", 2455.94)
-    complete(repo, "2026-09-12")
     assert balance(repo, "2026-09-13")["debit"]["opening_kcal"] == 1122.34
     repo.update_training(
         hike["training_id"],
@@ -270,10 +306,9 @@ def test_corrections_recalculate_future_debit_and_protected_recovery(
 
 def test_planned_activity_pauses_before_training_is_logged(repo: NutritionRepository) -> None:
     food(repo, "2026-09-09", 5300)
-    repo.review_day(
-        DayReviewInput(
+    repo.set_activity_plan(
+        ActivityPlanInput(
             on_date=date(2026, 10, 3),
-            intake_complete=False,
             exceptional_activity=True,
             reason="Planned seven hour hike",
         )
@@ -286,11 +321,9 @@ def test_planned_activity_pauses_before_training_is_logged(repo: NutritionReposi
 def test_last_partial_payment_and_missed_deficits_are_forgiven(repo: NutritionRepository) -> None:
     food(repo, "2026-09-09", 2600)
     food(repo, "2026-09-10", 2200)
-    complete(repo, "2026-09-10")
     assert balance(repo, "2026-09-10")["debit"]["closing_kcal"] == 100
     assert balance(repo, "2026-09-11")["planned_baseline_kcal"] == 1900
     food(repo, "2026-09-11", 1900)
-    complete(repo, "2026-09-11")
     assert balance(repo, "2026-09-11")["debit"]["closing_kcal"] == 0
 
 
@@ -298,11 +331,11 @@ def test_effective_date_and_no_references_to_other_policies(repo: NutritionRepos
     food(repo, "2026-09-08", 10000)
     assert balance(repo, "2026-09-09")["debit"]["opening_kcal"] == 0
     policy = json.dumps(repo.energy_policy())
-    assert "energy-credit/v3" in policy
-    assert "v1" not in policy and "v2" not in policy
+    assert "energy-credit/v4" in policy
+    assert all(version not in policy for version in ["v1", "v2", "v3"])
 
 
-def test_confirmed_day_with_unknown_calories_does_not_repay(repo: NutritionRepository) -> None:
+def test_day_with_unknown_calories_does_not_repay(repo: NutritionRepository) -> None:
     food(repo, "2026-09-09", 5300)
     entry = food(repo, "2026-09-10", 1800)
     repo.update_entry(
@@ -321,7 +354,26 @@ def test_confirmed_day_with_unknown_calories_does_not_repay(repo: NutritionRepos
             }
         ),
     )
-    complete(repo, "2026-09-10")
     result = balance(repo, "2026-09-10")
     assert result["status"] == "incomplete_intake"
     assert result["debit"]["repaid_kcal"] == 0
+    assert result["intake_settled"] is False
+    repo.update_entry(
+        entry["entry_id"],
+        expected_revision=2,
+        reason="Calories supplied",
+        changes=EntryChanges.model_validate(
+            {
+                "components": [
+                    {
+                        "name": "Food",
+                        "source": {"type": "user_provided"},
+                        "nutrition": {"calories_kcal": 1800},
+                    }
+                ]
+            }
+        ),
+    )
+    assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 200
+    repo.delete_entry(entry["entry_id"], expected_revision=3, reason="Wrong entry")
+    assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 0

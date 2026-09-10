@@ -1,6 +1,6 @@
 # Energy, recovery, and surplus policy
 
-- Policy ID: `energy-credit/v3`
+- Policy ID: `energy-credit/v4`
 - Accepted: 2026-09-10
 - Debit accounting begins: 2026-09-09, in the selected accounting timezone
 - Calculation basis: current policy, recalculated from current audited facts
@@ -48,13 +48,17 @@ The missed ordinary deficit is forgiven. Intake between the ordinary target
 and maintenance creates no additional debit and ordinarily repays none.
 Outstanding debit has no weekly cap, expiry, or automatic forgiveness.
 
-An above-maintenance total is visible even before a day is confirmed complete;
-it is a provisional observation from current logged facts. Unknown calorie
-values or incomplete logging cannot produce repayment. Only a past local day
-whose full intake the user explicitly confirmed through `nutrition_review_day`
-and whose logged components all have calories can repay debit. Confirming today
-does not settle it until the next local day. Future and empty unconfirmed days
-never repay. Corrections deterministically recalculate subsequent balances.
+Above-maintenance intake accrues from current logged facts. Today remains provisional.
+Once a local calendar day has passed, its logged intake automatically participates in
+repayment if at least one active intake entry exists and every component has known
+calories. No confirmation, timer, background job, or persisted closing event is needed:
+the ledger compares dates with local today whenever queried. Empty days and days with
+unknown calories never repay debit.
+
+Past logged intake is an accounting assumption, not a claim that every meal was logged.
+Backdated additions, edits, date changes, and deletions deterministically recalculate
+that day's repayment, recovery allocations, and all subsequent balances. A late meal
+can reduce or reverse previously calculated repayment or add new debit.
 
 Repayment uses achieved extra deficit beyond the ordinary plan and after the
 protected source recovery pool. It is not credited merely because the service
@@ -132,8 +136,8 @@ unused_exercise = exercise_used_for_debit + recovery_scheduled + exercise_expire
 ```
 
 Reservations and schedules from a day still in progress can shrink when more
-food is logged. Day-level calorie completeness does not mean all food was
-logged; day-review confirmation is a separate fact.
+food is logged. Past allocations also recalculate after corrections. Nutrient-field
+completeness does not prove all food was logged; settlement uses the current records.
 
 ### Hike example with an opening debit of 2,800 kcal
 
@@ -175,17 +179,19 @@ between ledgers. Meal titles and travel details do not affect the arithmetic.
 ## MCP presentation and current-trip activation
 
 The tool response explains only this active policy. It includes parameters,
-formulas, pauses, confirmation rules, and the stable document reference.
-Historical comparisons belong in repository history, not the tool response.
+formulas, pauses, automatic settlement rules, and the stable document reference.
 
-The schema migration creates empty day-review and audit tables. It does not
-seed personal records or confirm days. The effective date makes the existing
-9 September surplus participate immediately from logged facts, with no context
-question needed. ChatGPT records explicit day-completion confirmations and
-planned exceptional activity when the user provides them.
+The effective date makes the existing 9 September surplus participate immediately
+from logged facts. No personal records or daily confirmations are required. Optional
+planned exceptional activity is recorded through `nutrition_set_activity_plan`.
+The deployed schema's existing review and audit tables retain activity plans; the
+legacy intake-completion column is ignored and absent from public tools.
 
-Daily summaries and goals expose the server-calculated debit ledger, pauses,
-provisional status, unconfirmed dates, projected eligible days, exceptional-day
-status and protected recovery. `nutrition_get_day_review` provides the selected
-day's saved review and revision before a correction. Reviews use expected
-revisions and immutable audit snapshots. Clients must not maintain a hidden balance.
+Daily summaries and goals expose the debit ledger, pauses, provisional status,
+unsettled dates, projected eligible days, exceptional activity, and protected recovery.
+`day_closed` means the local date has passed; `intake_logged` means active entries exist;
+`intake_settled` additionally requires known calories. Unsettled dates identify current,
+empty, or unknown-calorie days affecting the balance's certainty.
+`nutrition_get_activity_plan` provides a saved activity plan and revision before a
+correction. Plans use expected revisions and immutable audit snapshots. Clients must
+not maintain a hidden balance.

@@ -29,8 +29,8 @@ def test_server_advertises_sixteen_tools_with_safe_annotations(
         "nutrition_delete_training",
         "nutrition_list_trainings",
         "nutrition_get_energy_policy",
-        "nutrition_get_day_review",
-        "nutrition_review_day",
+        "nutrition_get_activity_plan",
+        "nutrition_set_activity_plan",
     }
     assert tools["nutrition_get_entry"].annotations.readOnlyHint is True
     assert tools["nutrition_list_entries"].annotations.readOnlyHint is True
@@ -57,6 +57,9 @@ def test_schema_exposes_relative_day_and_component_provenance(
     assert "reported_burn_kcal" in str(training_schema)
     assert "power_meter" in str(training_schema)
     assert "confidence" in str(training_schema)
+    plan_schema = tools["nutrition_set_activity_plan"].parameters
+    assert "intake_complete" not in str(plan_schema)
+    assert "exceptional_activity" in plan_schema["required"]
 
 
 def test_streamable_http_initializes_and_calls_policy(
@@ -104,7 +107,7 @@ def test_streamable_http_initializes_and_calls_policy(
             )
             assert policy.status_code == 200
             structured = policy.json()["result"]["structuredContent"]
-            assert structured["policy_id"] == "energy-credit/v3"
+            assert structured["policy_id"] == "energy-credit/v4"
             assert structured["recovery_pool_cap"] == (
                 "next_day_planned_deficit / first_recovery_weight"
             )

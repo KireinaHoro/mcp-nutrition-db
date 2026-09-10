@@ -121,39 +121,39 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             policy = await session.call_tool("nutrition_get_energy_policy", {})
             assert policy.isError is False
             assert policy.structuredContent is not None
-            assert policy.structuredContent["policy_id"] == "energy-credit/v3"
+            assert policy.structuredContent["policy_id"] == "energy-credit/v4"
 
             review = await session.call_tool(
-                "nutrition_get_day_review",
+                "nutrition_get_activity_plan",
                 {
                     "on_date": "2026-08-27",
                 },
             )
             assert not review.isError
-            assert review.structuredContent["day_review"] is None
+            assert review.structuredContent["activity_plan"] is None
             reviewed = await session.call_tool(
-                "nutrition_review_day",
+                "nutrition_set_activity_plan",
                 {
                     "on_date": "2026-08-27",
-                    "intake_complete": True,
-                    "reason": "User confirms all meals logged",
+                    "exceptional_activity": True,
+                    "reason": "Planned exceptional activity",
                 },
             )
             assert not reviewed.isError
             assert reviewed.structuredContent["record"]["revision"] == 1
             review = await session.call_tool(
-                "nutrition_get_day_review",
+                "nutrition_get_activity_plan",
                 {
                     "on_date": "2026-08-27",
                 },
             )
             assert not review.isError
-            assert review.structuredContent["day_review"]["revision"] == 1
+            assert review.structuredContent["activity_plan"]["revision"] == 1
             conflict = await session.call_tool(
-                "nutrition_review_day",
+                "nutrition_set_activity_plan",
                 {
                     "on_date": "2026-08-27",
-                    "intake_complete": True,
+                    "exceptional_activity": True,
                     "reason": "Stale revision",
                 },
             )

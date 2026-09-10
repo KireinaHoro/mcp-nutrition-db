@@ -14,9 +14,9 @@ from starlette.responses import JSONResponse
 
 from .models import (
     DEFAULT_TIMEZONE,
+    ActivityPlanInput,
     ComponentInput,
     Confidence,
-    DayReviewInput,
     EntryChanges,
     EntryKind,
     Estimation,
@@ -51,12 +51,13 @@ about today, pass a relative_day window instead of calculating timestamps. Prese
 measurement method, evidence, and confidence. Outstanding surplus produces a bounded additional
 deficit on subsequent eligible days. Repeated overshoots extend repayment without increasing the
 daily adjustment. Do not classify overshoots or ask about travel or return dates for accounting.
-Use nutrition_review_day only
-when the user explicitly confirms the day's intake is fully logged; never infer completion from
-intake_complete, which describes nutrient fields only. Flag planned exceptional activity before
-it occurs. Fuel demanding exercise and recovery first; debit is bookkeeping, not an instruction
-to under-fuel. Use the server's capped additional deficit and projected eligible days rather than
-inventing repayment targets or deadlines.
+Past local days with logged intake and known calories settle automatically when queried.
+No daily confirmation or scheduled closing event is needed. Today's accounting is provisional;
+backdated additions, edits, and deletions recalculate subsequent balances. Empty days and days
+with unknown calories cannot repay debit. Use nutrition_set_activity_plan for optional planned
+exceptional activity before it occurs. Fuel demanding exercise and recovery first; debit is
+bookkeeping, not an instruction to under-fuel. Use the server's capped additional deficit and
+projected eligible days rather than inventing repayment targets or deadlines.
 Nutrition and exercise estimates are not medical advice."""
 
 READ_ONLY = ToolAnnotations(
@@ -366,7 +367,7 @@ def create_server(
             "Sum nutrition over a bounded window, grouped by day or whole range. For today's "
             "macros and energy balance, use a relative_day window. Energy results distinguish "
             "ordinary target, protected recovery, exercise allowance, and debit adjustment. "
-            "Check debit's unconfirmed_dates before claiming repayment."
+            "Check debit's unsettled_dates before claiming repayment."
         ),
         annotations=READ_ONLY,
     )
@@ -452,50 +453,46 @@ def create_server(
             return repository.energy_policy()
 
     @server.tool(
-        name="nutrition_get_day_review",
+        name="nutrition_get_activity_plan",
         description=(
-            "Read the selected day's completion and exceptional-activity review, including "
-            "its revision. Use this before correcting a review; no record means revision 0."
+            "Read the selected day's optional exceptional-activity plan, including "
+            "its revision. Use this before correcting a plan; no record means revision 0."
         ),
         annotations=READ_ONLY,
     )
-    def nutrition_get_day_review(
+    def nutrition_get_activity_plan(
         ctx: MCPContext,  # type: ignore[type-arg]
         on_date: date | None = None,
         timezone: str = default_timezone,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_get_day_review", ctx):
+        with logged_tool_call("nutrition_get_activity_plan", ctx):
             try:
-                return repository.get_day_review(on_date, timezone)
+                return repository.get_activity_plan(on_date, timezone)
             except Exception as error:
                 raise _translate_error(error) from error
 
     @server.tool(
-        name="nutrition_review_day",
+        name="nutrition_set_activity_plan",
         description=(
-            "Record explicit user confirmation that all intake for a day is logged, or reopen it. "
-            "Do not infer completion from known nutrient fields or the end of a calendar day. "
-            "Only past, confirmed days can repay debit. Mark a planned exceptional activity day "
-            "to pause extra restriction before training is logged. Supply all review fields; "
-            "expected_revision is 0 for a new review."
+            "Set or clear an optional planned exceptional activity day to pause extra restriction "
+            "before training is logged. No daily intake confirmation is needed. "
+            "expected_revision is 0 for a new plan."
         ),
         annotations=MUTATING,
     )
-    def nutrition_review_day(
+    def nutrition_set_activity_plan(
         on_date: date,
-        intake_complete: bool,
+        exceptional_activity: bool,
         reason: Annotated[str, Field(min_length=1, max_length=500)],
         ctx: MCPContext,  # type: ignore[type-arg]
-        exceptional_activity: bool = False,
         timezone: str = default_timezone,
         expected_revision: Annotated[int, Field(ge=0)] = 0,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_review_day", ctx):
+        with logged_tool_call("nutrition_set_activity_plan", ctx):
             try:
-                return repository.review_day(
-                    DayReviewInput(
+                return repository.set_activity_plan(
+                    ActivityPlanInput(
                         on_date=on_date,
-                        intake_complete=intake_complete,
                         exceptional_activity=exceptional_activity,
                         timezone=timezone,
                         expected_revision=expected_revision,

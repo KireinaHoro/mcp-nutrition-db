@@ -338,11 +338,10 @@ class GoalInput(StrictModel):
         return self
 
 
-class DayReviewInput(StrictModel):
+class ActivityPlanInput(StrictModel):
     on_date: date
     timezone: str = DEFAULT_TIMEZONE
-    intake_complete: bool
-    exceptional_activity: bool = False
+    exceptional_activity: bool
     expected_revision: int = Field(default=0, ge=0)
     reason: str = Field(min_length=1, max_length=500)
 

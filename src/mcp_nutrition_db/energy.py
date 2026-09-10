@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-POLICY_ID = "energy-credit/v3"
+POLICY_ID = "energy-credit/v4"
 DEBIT_EFFECTIVE_FROM = date(2026, 9, 9)
 DAILY_ADJUSTMENT_MKCAL = 200_000
 EXCEPTIONAL_BURN_MKCAL = 1_000_000
