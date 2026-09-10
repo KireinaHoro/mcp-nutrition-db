@@ -1,290 +1,211 @@
-# Exercise and recovery energy-credit policy
+# Energy, recovery, and surplus policy
 
-- Policy ID: `energy-credit/v2`
-- Status: Active in production (schema v3)
-- Accepted: 2026-08-31
-- Last revised: 2026-08-31
-- Applies when: a release that declares this policy ID is deployed
+- Policy ID: `energy-credit/v3`
+- Accepted: 2026-09-10
+- Debit accounting begins: 2026-09-09, in the selected accounting timezone
+- Calculation basis: current policy, recalculated from current audited facts
 
-## 1. Purpose
+## Purpose and limits
 
-This policy turns logged exercise expenditure into a conservative calorie
-allowance without implying that the user should eat every exercise calorie.
-It also permits part of a large unused allowance to increase flexibility over
-the following recovery days.
+The service distinguishes ordinary intake targets, optional exercise allowance,
+protected recovery allowance, and outstanding surplus. A surplus can extend the
+number of easier days carrying a modest additional deficit; it never increases
+the requested daily adjustment above 200 kcal. Fuel demanding activity and its
+recovery first. An estimated large exercise deficit is an accounting observation,
+not a suggested intake or an instruction to exercise more.
 
-The policy has three goals:
+The confidence factors, activity thresholds, recovery pool and taper are planning
+conventions, not measured physiological requirements. Adequate carbohydrate,
+protein, hydration, and the next activity still matter. The service does not
+infer that a calorie allowance guarantees adequate fuelling.
 
-- preserve the full reported exercise estimate and its provenance;
-- discount less reliable estimates before they affect calorie accounting;
-- prevent a very large physical day from producing an implausibly large
-  single-day target or an indefinitely rolling calorie balance.
+## Ordinary and exercise accounting
 
-This is planning logic, not a physiological measurement or medical
-recommendation. A budget or allowance is a ceiling available to the user, not
-a prescription to consume it.
-
-## 2. Terms
-
-For a local calendar day `d`:
-
-- `base_burn[d]` is the effective goal's ordinary daily energy expenditure.
-- `deficit[d]` is the effective planned calorie deficit.
-- `ordinary_target[d] = base_burn[d] - deficit[d]`.
-- `reported_training_burn[d]` is the sum of the unmodified burn estimates on
-  active training records assigned to the day.
-- `credited_training_burn[d]` is the sum after applying each training record's
-  confidence multiplier.
-- `incoming_recovery[d]` is the non-recurring allowance scheduled by earlier
-  exercise days.
-- `intake[d]` is the day's logged calorie intake.
-
-The service must expose both reported and credited burn. It must not overwrite
-the source estimate with the policy-adjusted value.
-
-## 3. Training evidence and confidence
-
-Every training record that participates in energy accounting has:
-
-- `reported_burn_kcal`;
-- a structured `measurement_method` or source;
-- `confidence`: `high`, `medium`, or `low`;
-- enough supporting details to explain the classification when available, such
-  as device, average power, mechanical work, heart-rate/GPS model, or manual
-  calculation.
-
-The confidence multipliers are:
-
-| Confidence | Multiplier | Typical evidence |
-| --- | ---: | --- |
-| `high` | 1.00 | Strong direct basis, such as a cycling power meter or indirect calorimetry |
-| `medium` | 0.80 | Individualized but model-derived estimate, such as a wearable using heart rate and GPS |
-| `low` | 0.60 | Generic activity tables, rough manual estimates, or weakly supported device estimates |
-
-These values are policy coefficients, not statistical confidence intervals.
-Source type may guide the initial classification, but it does not create a
-second hidden multiplier. The confidence remains explicit and correctable.
-
-For each training record:
+For each local calendar day:
 
 ```text
-credited_burn = reported_burn * confidence_multiplier
+ordinary_target = base_burn - planned_deficit
+credited_exercise = sum(reported_active_burn * confidence_multiplier)
+estimated_maintenance = base_burn + credited_exercise
+planned_baseline = ordinary_target + incoming_recovery - additional_deficit
+available_ceiling = planned_baseline + credited_exercise
 ```
 
-Corrections to burn, method, confidence, timing, or deletion must be auditable
-and must cause affected derived balances to be recalculated.
+Confidence multipliers are high 1.00, medium 0.80, and low 0.60. Reported burn and
+its evidence remain intact. Exercise and recovery allowances are optional
+ceilings. They are never prescriptions to consume every estimated calorie.
 
-## 4. Same-day accounting
+## Debit creation and repayment
 
-The day's planned baseline budget is:
+From the debit effective date onwards:
 
 ```text
-planned_baseline = ordinary_target + incoming_recovery
+new_debit = max(0, logged_intake - estimated_maintenance)
+closing_debit = opening_debit + new_debit - actual_repayment
 ```
 
-The confidence-adjusted same-day exercise allowance is added as an optional
-ceiling:
+The missed ordinary deficit is forgiven. Intake between the ordinary target
+and maintenance creates no additional debit and ordinarily repays none.
+Outstanding debit has no weekly cap, expiry, or automatic forgiveness.
+
+An above-maintenance total is visible even before a day is confirmed complete;
+it is a provisional observation from current logged facts. Unknown calorie
+values or incomplete logging cannot produce repayment. Only a past local day
+whose full intake the user explicitly confirmed through `nutrition_review_day`
+and whose logged components all have calories can repay debit. Confirming today
+does not settle it until the next local day. Future and empty unconfirmed days
+never repay. Corrections deterministically recalculate subsequent balances.
+
+Repayment uses achieved extra deficit beyond the ordinary plan and after the
+protected source recovery pool. It is not credited merely because the service
+lowered a target or cancelled an allowance. Unused incoming recovery expires
+and cannot repay debit:
 
 ```text
-available_ceiling = planned_baseline + credited_training_burn
+incoming_used = min(max(intake - ordinary_target, 0), incoming_recovery)
+extra_deficit = max(0,
+    ordinary_target + credited_exercise + incoming_used - intake - reserved_pool)
+actual_repayment = min(opening_debit, extra_deficit)
 ```
 
-Incoming recovery is attributed before same-day exercise allowance. Therefore:
+Exercise credit used for repayment is excluded from both new recovery credit
+and expired exercise credit. A naturally larger achieved exercise deficit can
+repay more than 200 kcal. The 200 kcal limit controls requested restriction,
+not the arithmetic of an observed completed day.
+
+## Additional deficit and its pauses
+
+On an eligible day, request at most `min(200, opening_debit)` additional kcal
+of deficit, bounded by the available ordinary target. Do not apply an extra
+restriction without an active goal and positive planned deficit.
+
+Pause the additional restriction:
+
+- during a confirmed trip, including the return date;
+- while a calorie-surplus context question or return-date question is unresolved;
+- on an exceptional activity day and the following calendar day;
+- on any day receiving protected recovery from exceptional activity.
+
+Pausing a requested restriction does not erase debit or prevent repayment from
+an actual, fully logged extra deficit. No reduction stacks or catches up after
+a pause. `ceil(remaining_debit / 200)` is a projection in eligible days, not a
+calendar deadline; it assumes each such day actually achieves 200 kcal extra.
+A projection above 28 eligible days prompts review, without automatically
+forgiving debit or increasing restriction. A final partial adjustment uses the
+remaining amount exactly.
+
+An exceptional day means at least 1,000 confidence-adjusted exercise kcal,
+at least 180 total logged activity minutes, or an explicit exceptional-activity
+flag in its day review. The flag also supports planned activities before burn
+is logged. These thresholds are conservative software defaults and are exposed
+by the policy tool; they are not clinical cutoffs.
+
+## Protected recovery comes first
+
+Incoming recovery is attributed before same-day exercise:
 
 ```text
-exercise_credit_used = clamp(
-  intake - ordinary_target - incoming_recovery,
-  lower = 0,
-  upper = credited_training_burn
-)
-
-unused_exercise_credit = credited_training_burn - exercise_credit_used
+exercise_used = clamp(intake - ordinary_target - incoming_recovery,
+                      0, credited_exercise)
+unused_exercise = credited_exercise - exercise_used
+pool_cap = next_day_planned_deficit / 0.50
 ```
 
-This ordering is important. Unused incoming recovery expires; it does not
-become new exercise credit and cannot generate another recovery schedule.
+On exceptional activity days, reserve `min(unused_exercise, pool_cap)` **before**
+repaying debit. Split the reserve into next-day / second-day / third-day
+candidates of 50% / 30% / 20%. Their protected status survives outstanding debit.
+Incoming candidates share the destination day's planned-deficit cap. Collisions
+are reduced proportionally with deterministic integer rounding. Clipped or
+unconsumed allocations expire; they are never redistributed or used later to
+repay debit. Reserving the source pool before destination clipping avoids
+future-day collisions changing an already allocated source repayment.
 
-The service should present `ordinary_target`, `incoming_recovery`,
-`credited_training_burn`, `available_ceiling`, and
-`unused_exercise_credit` separately. A single number labelled merely
-"calorie target" would obscure the distinction between the ordinary plan and
-optional exercise allowance.
+On ordinary activity days with outstanding debit, new carryover is suspended
+until the day's observed repayment clears that debit. Any remaining unused
+exercise can then generate ordinary capped recovery. Incoming ordinary
+carryover is also suspended while a day opens with debit. Cancellation does
+not itself count as repayment. With no outstanding debit, ordinary exercise
+uses the same capped recovery pool and taper.
 
-## 5. Scheduling recovery allowance
-
-Recovery scheduling first limits the confidence-adjusted, unused same-day
-exercise credit to a recoverable pool. The pool cap is the next local day's
-planned deficit divided by the first-day recovery weight:
+Conservation for each source day:
 
 ```text
-recovery_pool_cap[d] = planned_deficit[d + 1] / 0.50
-recovery_pool[d] = min(unused_exercise_credit[d], recovery_pool_cap[d])
+unused_exercise = exercise_used_for_debit + recovery_scheduled + exercise_expired
 ```
 
-With a 500 kcal next-day deficit, at most 1,000 kcal enters the recovery pool.
-Credit above the pool cap expires instead of flattening all three recovery days
-at their individual caps. If the next day has no active goal or a zero deficit,
-the pool cap is zero.
+Reservations and schedules from a day still in progress can shrink when more
+food is logged. Day-level calorie completeness does not mean all food was
+logged; day-review confirmation is a separate fact.
 
-1. Split the recoverable pool into three candidate allocations:
-   - next local day: `50%`;
-   - two local days later: `30%`;
-   - three local days later: `20%`.
-2. Cap the aggregate incoming candidates at each destination day's planned
-   deficit. Under the current 500 kcal deficit, this is a 500 kcal daily cap.
-3. Any amount clipped by a daily cap expires. It is not redistributed to a
-   later day.
-4. Any scheduled amount not consumed on its destination day expires. It does
-   not roll forward and does not create another recovery schedule.
+### Hike example with an opening debit of 2,800 kcal
 
-The destination-day cap applies to the aggregate incoming recovery from all
-source days. If several source days produce candidates for the same destination
-and their sum exceeds its cap, reduce those candidates proportionally to fit;
-the clipped portions expire. This keeps the result independent of processing
-order and prevents consecutive large exercise days from multiplying the cap.
-
-For each source day with a positive recovery pool, offsets `n = 1, 2, 3` have
-weights `0.50`, `0.30`, and `0.20`. For each destination day `t`:
+Use 2,500 base burn, 500 ordinary deficit, 3,917 reported exercise kcal at
+medium confidence, 2,455.94 intake, and no incoming recovery:
 
 ```text
-recovery_pool_cap[d] = planned_deficit[d + 1] / weight[1]
-recovery_pool[d] = min(unused_exercise_credit[d], recovery_pool_cap[d])
-candidate[d, n] = recovery_pool[d] * weight[n]
-raw_incoming[t] = sum(candidate[d, n] where d + n = t)
-incoming_recovery[t] = min(raw_incoming[t], planned_deficit[t])
-
-if raw_incoming[t] > 0:
-  scheduled[d, n] = candidate[d, n] * incoming_recovery[t] / raw_incoming[t]
-
-excluded_from_recovery[d] = unused_exercise_credit[d] - recovery_pool[d]
-expired_at_creation[d] = unused_exercise_credit[d] - sum(scheduled[d, n])
+credited_exercise = 3,133.6
+unused_exercise = 2,677.66
+protected_pool = 1,000
+actual_repayment = 1,677.66
+closing_debit = 1,122.34
+protected recovery candidates = 500 / 300 / 200
 ```
 
-Zero unused credit or a zero recovery pool produces no recovery allowance.
+No additional restriction is requested on the hike day or its protected
+recovery days. This reuses historical numbers to illustrate allocation; it
+is not an intake recommendation for another hike.
 
-## 6. Worked examples
+## Calorie-based context prompts and trips
 
-### 1,200 kcal unused credit at high confidence
+Meal titles, flight numbers, restaurants, locations, and other narrative details
+are **not** used to detect trips. Calories do not establish whether someone is
+travelling. They trigger a context question when either:
 
-The 1,200 kcal is already confidence-adjusted. With a 500 kcal next-day deficit,
-the recovery pool is capped at 1,000 kcal. Candidate allocations are therefore
-500/300/200 kcal and 200 kcal is excluded from recovery. The overflow is not
-moved to days two or three.
+- one day has at least 500 kcal above estimated maintenance; or
+- at least two days within three local calendar days each have at least 250 kcal
+  above estimated maintenance.
 
-### 1,200 kcal reported unused burn at medium confidence
+Use exercise-adjusted maintenance so fuelling a large activity does not look
+like a surplus. Existing logged surplus can trigger the question before day
+completion, with its uncertainty exposed. The response includes dates, intake,
+estimated maintenance, and observed surplus as evidence.
 
-The credited amount is `1,200 * 0.80 = 960 kcal`. Candidate and applied
-allocations are 480/288/192 kcal; none reaches the 500 kcal daily cap.
+`travel_context.action_required = ask_overshoot_context` tells ChatGPT to ask
+whether this is an ongoing trip or a one-off. Only if travelling should it ask
+when the user is scheduled to get home. It must not guess or store a trip from
+calorie evidence alone. A user's explicit travel statement can also be recorded
+without waiting for any numerical threshold.
 
-### Large hike
+`nutrition_set_trip` records the user's answer:
 
-Given 3,917 kcal reported burn at medium confidence, 2,000 kcal ordinary
-target, no incoming recovery, and 2,455.94 kcal intake:
+- `active`: a confirmed trip, with a known or unknown return date;
+- `not_travelling`: a bounded range of surplus dates the user explained as
+  non-travel; this dismisses those prompts without pausing adjustments;
+- `cancelled`: a bounded cancellation of a saved trip/context.
 
-```text
-credited_training_burn = 3917 * 0.80 = 3133.60
-exercise_credit_used = 2455.94 - 2000 = 455.94
-unused_exercise_credit = 3133.60 - 455.94 = 2677.66
-```
+Records are keyed by accounting timezone and start date, use expected revisions,
+and have immutable audit snapshots. Active trips cannot overlap. A missing
+return date keeps extra restriction paused and asks for the return date.
+A known return starts eligibility on the following local day, subject to activity
+and recovery pauses. Adjusting the return date recalculates those pauses.
+Use the usual accounting timezone throughout travel to avoid shifting debit
+between ledgers. Later unexplained surplus dates can prompt a new question.
 
-The recovery pool is capped at 1,000 kcal by the next day's 500 kcal deficit.
-Before collisions with other source days, the schedule is therefore
-500/300/200 kcal and 1,677.66 kcal is excluded from recovery. This preserves a
-diminishing recovery profile instead of producing three saturated days.
+## MCP presentation and current-trip activation
 
-### Consecutive large days
+The tool response explains only this active policy. It includes parameters,
+formulas, pauses, confirmation rules, and the stable document reference.
+Historical comparisons belong in repository history, not the tool response.
 
-If Sunday produces 500/300/200 kcal and another large ride on Monday produces
-500/300/200 kcal, Tuesday receives candidates of 300 kcal from Sunday and
-500 kcal from Monday. The aggregate 800 kcal is capped at Tuesday's 500 kcal
-planned deficit. Proportional collision handling attributes 187.5 kcal to
-Sunday and 312.5 kcal to Monday; the other 300 kcal expires.
+The schema migration creates empty trip, day-review, and audit tables. It does
+not seed personal records, confirm days, or infer a return date. The effective
+date makes the existing 9 September surplus participate immediately from logged
+facts, with a context prompt and paused additional restriction. ChatGPT owns
+asking the user and recording their answers.
 
-## 7. Versioning and recalculation
-
-All derived energy-balance responses must include `policy_id`. Stored training,
-meal, goal, and audit facts remain separate from derived policy results.
-
-A later semantic change after deployment requires a new policy ID. Tunable
-configuration such as confidence multipliers, weights, and caps must be
-effective-dated if historical answers are intended to remain reproducible. The
-API must make clear whether a historical result was calculated using the policy
-effective on that historical day or recalculated under the current policy.
-
-Corrections can affect the source day and its following three days. The
-implementation should derive the schedule deterministically from current facts
-and effective-dated policy rather than mutating opaque running balances.
-An allocation derived from a source day still in progress is provisional and
-may shrink as more intake is logged. Responses must identify provisional
-source days; closing a calendar day does not prevent a later audited correction
-from recalculating its results.
-
-## 8. MCP presentation
-
-The calculation belongs in the service. ChatGPT must not be required to
-reconstruct the formulas or preserve a hidden rolling balance in conversation.
-
-The MCP surface should provide:
-
-- concise server initialization instructions explaining the distinction
-  between ordinary target, incoming recovery, and optional exercise allowance;
-- action-oriented descriptions on every affected summary, goal, training, and
-  energy-balance tool;
-- a read-only `nutrition_get_energy_policy` tool returning the active policy ID,
-  effective parameters, definitions, and a stable document reference;
-- `policy_id` in every response whose values depend on this policy;
-- server-calculated ledger fields for reported burn, credited burn, allowance
-  used, allowance unused, scheduled recovery, and expired amounts.
-
-The policy tool should return structured data, not merely this Markdown file.
-For example:
-
-```json
-{
-  "policy_id": "energy-credit/v2",
-  "status": "active",
-  "confidence_multipliers": {"high": 1.0, "medium": 0.8, "low": 0.6},
-  "recovery_weights": [0.5, 0.3, 0.2],
-  "recovery_pool_cap": "next_day_planned_deficit / first_recovery_weight",
-  "recovery_pool_overflow": "expire",
-  "daily_cap": "destination_planned_deficit",
-  "overflow": "expire",
-  "missed_allocation": "expire",
-  "document_ref": "docs/energy-credit-policy.md"
-}
-```
-
-An externally reachable canonical URL may accompany `document_ref` if the
-policy is deliberately published later. The repository path alone is an audit
-reference; ChatGPT cannot be expected to retrieve a local file from it.
-
-There is no special MCP "description tool" that is guaranteed to be called.
-Clients receive server instructions during initialization and tool metadata
-during discovery, then the model selects tools. The policy lookup tool is for
-explanation and auditability, not a prerequisite for correct calculation.
-
-A document URL is useful provenance but is insufficient as the only guidance:
-the client might not fetch it. The essential cross-tool semantics belong in the
-server instructions, per-tool call guidance belongs in tool descriptions, and
-the service must enforce the actual arithmetic. The most important server
-instructions should remain concise and appear first.
-
-This follows [OpenAI's MCP server guidance](https://developers.openai.com/plugins/build/mcp-server),
-which assigns cross-tool guidance to server instructions and call-selection
-guidance to tool names, descriptions, schemas, and annotations.
-
-Suggested leading server instruction:
-
-> Calorie accounting distinguishes the ordinary target, incoming recovery
-> allowance, and confidence-adjusted exercise allowance. An allowance is an
-> optional ceiling, not a recommendation to eat it. Use server-returned energy
-> calculations; call `nutrition_get_energy_policy` when explaining the policy
-> or proposing a change.
-
-## 9. Version history
-
-- `energy-credit/v2` caps the source recovery pool before applying the
-  50%/30%/20% split, preserving a diminishing profile on isolated large days.
-- `energy-credit/v1` split all unused credited exercise before independently
-  clipping destination days, which could flatten or invert the displayed
-  source-day schedule when candidates saturated several caps.
+Daily summaries and goals expose the server-calculated debit ledger, pauses,
+provisional status, unconfirmed dates, projected eligible days, exceptional-day
+status, protected recovery, and the calorie-based context action. Logging a meal
+also returns current energy context so the prompt can be surfaced promptly.
+`nutrition_get_energy_context` provides saved records and revisions, including
+when a trip has no return date yet. Clients must not maintain a hidden balance.

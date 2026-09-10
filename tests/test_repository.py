@@ -51,9 +51,9 @@ def calorie_entry(on_date: date, calories: float) -> LogEntryInput:
 
 
 def test_schema_migration_is_repeatable(repository: NutritionRepository) -> None:
-    assert repository.schema_version() == 3
+    assert repository.schema_version() == 4
     repository.migrate()
-    assert repository.schema_version() == 3
+    assert repository.schema_version() == 4
 
 
 def test_v1_goal_migrates_calorie_target_to_base_burn(tmp_path: Path) -> None:
@@ -77,11 +77,11 @@ def test_v1_goal_migrates_calorie_target_to_base_burn(tmp_path: Path) -> None:
 
     migrated = NutritionRepository(database)
     goal = migrated.get_goals(on_date=date(2026, 8, 27))["current"]
-    assert migrated.schema_version() == 3
+    assert migrated.schema_version() == 4
     assert goal["base_burn_kcal"] == 2_000
     assert goal["targets"]["calories_kcal"] is None
     assert goal["energy_budget"]["ordinary_target_kcal"] == 2_000
-    assert goal["energy_budget"]["policy_id"] == "energy-credit/v2"
+    assert goal["energy_budget"]["policy_id"] == "energy-credit/v3"
 
 
 def test_v2_training_migrates_with_conservative_provenance(tmp_path: Path) -> None:
@@ -113,7 +113,7 @@ def test_v2_training_migrates_with_conservative_provenance(tmp_path: Path) -> No
 
     migrated = NutritionRepository(database)
     training = migrated.get_training("legacy-training")
-    assert migrated.schema_version() == 3
+    assert migrated.schema_version() == 4
     assert training["reported_burn_kcal"] == 1_000
     assert training["confidence"] == "medium"
     assert training["measurement_method"] == "device_estimate"
@@ -377,7 +377,7 @@ def test_confidence_adjustment_and_recovery_weights(repository: NutritionReposit
     )
 
     balance = repository.energy_balance(date(2026, 8, 27))
-    assert balance["policy_id"] == "energy-credit/v2"
+    assert balance["policy_id"] == "energy-credit/v3"
     assert balance["reported_training_burn_kcal"] == 1_200
     assert balance["credited_training_burn_kcal"] == 960
     assert balance["unused_exercise_credit_kcal"] == 960

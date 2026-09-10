@@ -14,8 +14,21 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .energy import (
+    CONTEXT_REPEAT_WINDOW_DAYS,
+    CONTEXT_REPEATED_SURPLUS_MKCAL,
+    CONTEXT_SINGLE_SURPLUS_MKCAL,
+    DAILY_ADJUSTMENT_MKCAL,
+    DEBIT_EFFECTIVE_FROM,
+    EXCEPTIONAL_BURN_MKCAL,
+    EXCEPTIONAL_DURATION_MS,
+    POLICY_ID,
+    REVIEW_AFTER_ELIGIBLE_DAYS,
+    travel_context,
+)
 from .models import (
     DEFAULT_TIMEZONE,
+    DayReviewInput,
     EntryChanges,
     GoalInput,
     ListEntriesInput,
@@ -25,6 +38,7 @@ from .models import (
     NutritionValues,
     SummarizeInput,
     TrainingChanges,
+    TripInput,
     resolve_window,
     validate_timezone,
 )
@@ -39,9 +53,9 @@ NUTRIENTS: dict[str, tuple[str, int]] = {
     "sodium_mg": ("sodium_mg", 1),
 }
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 CREATE_RETRY_WINDOW = timedelta(minutes=10)
-ENERGY_POLICY_ID = "energy-credit/v2"
+ENERGY_POLICY_ID = POLICY_ID
 CONFIDENCE_MULTIPLIERS_PERMILLE = {"high": 1_000, "medium": 800, "low": 600}
 RECOVERY_WEIGHTS_PERMILLE = (500, 300, 200)
 
@@ -269,6 +283,40 @@ UPDATE trainings SET
 """
 
 
+MIGRATION_4 = """
+CREATE TABLE trips (
+    timezone TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    return_date TEXT,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('active', 'not_travelling', 'cancelled')),
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    reason TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(timezone, start_date)
+);
+CREATE TABLE day_reviews (
+    timezone TEXT NOT NULL,
+    on_date TEXT NOT NULL,
+    intake_complete INTEGER NOT NULL CHECK(intake_complete IN (0, 1)),
+    exceptional_activity INTEGER NOT NULL CHECK(exceptional_activity IN (0, 1)),
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    reason TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(timezone, on_date)
+);
+CREATE TABLE energy_context_revisions (
+    revision_id TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL,
+    record_key TEXT NOT NULL,
+    resulting_revision INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
+
 class NutritionRepository:
     def __init__(self, database_path: str | Path, *, clock: Any = _utc_now) -> None:
         self.database_path = str(database_path)
@@ -317,6 +365,13 @@ class NutritionRepository:
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (3, _timestamp(self.clock())),
+                )
+
+            if 4 not in versions:
+                connection.executescript(MIGRATION_4)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (4, _timestamp(self.clock())),
                 )
 
     def schema_version(self) -> int:
@@ -1205,6 +1260,110 @@ class NutritionRepository:
             result["energy_budget"] = self.energy_balance(request.effective_from, request.timezone)
             return result
 
+    def _context_facts(
+        self, timezone: str
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+        validate_timezone(timezone)
+        with self._connect() as connection:
+            trips = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM trips WHERE timezone = ? ORDER BY start_date", (timezone,)
+                )
+            ]
+            reviews = {
+                row["on_date"]: dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM day_reviews WHERE timezone = ?", (timezone,)
+                )
+            }
+        return trips, reviews
+
+    def get_energy_context(
+        self, on_date: date | None = None, timezone: str = DEFAULT_TIMEZONE
+    ) -> dict[str, Any]:
+        validate_timezone(timezone)
+        day = on_date or self.clock().astimezone(ZoneInfo(timezone)).date()
+        trips, reviews = self._context_facts(timezone)
+        return {
+            "policy_id": ENERGY_POLICY_ID,
+            "on_date": day.isoformat(),
+            "timezone": timezone,
+            "trips": trips,
+            "day_review": reviews.get(day.isoformat()),
+            "travel_context": self.energy_balance(day, timezone)["travel_context"],
+        }
+
+    def set_trip(self, request: TripInput) -> dict[str, Any]:
+        return self._set_energy_context_record(request, "trip")
+
+    def review_day(self, request: DayReviewInput) -> dict[str, Any]:
+        if (
+            request.intake_complete
+            and request.on_date > self.clock().astimezone(ZoneInfo(request.timezone)).date()
+        ):
+            raise ValueError("cannot confirm intake for a future day")
+        return self._set_energy_context_record(request, "day_review")
+
+    def _set_energy_context_record(
+        self, request: TripInput | DayReviewInput, record_type: str
+    ) -> dict[str, Any]:
+        is_trip = isinstance(request, TripInput)
+        table = "trips" if is_trip else "day_reviews"
+        key = "start_date" if is_trip else "on_date"
+        values = request.model_dump(mode="json", exclude={"expected_revision"})
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                f"SELECT * FROM {table} WHERE timezone = ? AND {key} = ?",
+                (request.timezone, values[key]),
+            ).fetchone()
+            current_revision = 0 if previous is None else int(previous["revision"])
+            if request.expected_revision != current_revision:
+                raise RevisionConflictError(
+                    values[key],
+                    request.expected_revision,
+                    current_revision,
+                    record_type=record_type,
+                )
+            if isinstance(request, TripInput) and request.status == "active":
+                overlapping = connection.execute(
+                    "SELECT 1 FROM trips WHERE timezone = ? AND status = 'active' "
+                    "AND start_date != ? AND start_date <= ? "
+                    "AND (return_date IS NULL OR return_date >= ?)",
+                    (
+                        request.timezone,
+                        values[key],
+                        values["return_date"] or "9999-12-31",
+                        values[key],
+                    ),
+                ).fetchone()
+                if overlapping:
+                    raise ValueError("active trips cannot overlap; correct the existing trip first")
+            values["revision"] = current_revision + 1
+            values["updated_at"] = _timestamp(self.clock())
+            columns = list(values)
+            connection.execute(
+                f"INSERT INTO {table} ({', '.join(columns)}) "
+                f"VALUES ({', '.join('?' for _ in columns)}) "
+                f"ON CONFLICT(timezone, {key}) DO UPDATE SET "
+                + ", ".join(f"{column} = excluded.{column}" for column in columns),
+                tuple(values.values()),
+            )
+            connection.execute(
+                "INSERT INTO energy_context_revisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _new_id(),
+                    record_type,
+                    request.timezone + ":" + values[key],
+                    values["revision"],
+                    request.reason,
+                    json.dumps(values, sort_keys=True),
+                    values["updated_at"],
+                ),
+            )
+        return {"policy_id": ENERGY_POLICY_ID, "record": values}
+
     @staticmethod
     def energy_policy() -> dict[str, Any]:
         return {
@@ -1214,13 +1373,13 @@ class NutritionRepository:
             "confidence_multipliers": {"high": 1.0, "medium": 0.8, "low": 0.6},
             "recovery_weights": [0.5, 0.3, 0.2],
             "recovery_pool_cap": "next_day_planned_deficit / first_recovery_weight",
-            "recovery_pool_overflow": "expire",
+            "recovery_pool_overflow": "repay_eligible_debit_then_expire",
             "daily_cap": "destination_planned_deficit",
             "collision_handling": "proportional",
             "overflow": "expire",
             "missed_allocation": "expire",
             "ordinary_target_formula": "base_burn - deficit",
-            "planned_baseline_formula": "ordinary_target + incoming_recovery",
+            "planned_baseline_formula": "ordinary_target + incoming_recovery - debit_adjustment",
             "available_ceiling_formula": ("planned_baseline + credited_training_burn"),
             "allowance_semantics": "optional_ceiling_not_intake_recommendation",
             "attribution_order": [
@@ -1228,6 +1387,48 @@ class NutritionRepository:
                 "incoming_recovery",
                 "same_day_exercise_allowance",
             ],
+            "debit": {
+                "effective_from": DEBIT_EFFECTIVE_FROM.isoformat(),
+                "creation": "max(0, logged_intake - base_burn - credited_training_burn)",
+                "missed_ordinary_deficit": "forgiven",
+                "daily_additional_deficit_cap_kcal": 200,
+                "balance_cap": None,
+                "expiry": None,
+                "repayment": "actual_extra_deficit_after_protected_recovery_reserve",
+                "repayment_daily_cap": None,
+                "repayment_requires": "past_day; user_confirmed_complete_intake; known_calories",
+                "unconfirmed_surplus": "accrue_as_provisional_lower_bound",
+                "projection": "ceil(remaining_debit / 200) eligible days, not a deadline",
+                "review_after_projected_eligible_days": REVIEW_AFTER_ELIGIBLE_DAYS,
+                "pauses": [
+                    "travel",
+                    "unknown_return_date",
+                    "exceptional_activity",
+                    "day_after_exceptional_activity",
+                    "protected_recovery",
+                ],
+                "pause_effect": "no_additional_restriction; actual_extra_deficit_can_still_repay",
+            },
+            "exceptional_activity": {
+                "credited_burn_threshold_kcal": 1000,
+                "total_duration_threshold_minutes": 180,
+                "explicit_day_review_supported": True,
+                "recovery_priority": "reserve_capped_pool_before_debit_repayment",
+                "ordinary_carryover_with_debit": "suspended",
+                "protected_carryover_with_debit": "honoured",
+                "coefficients": "planning_conventions_not_physiological_requirements",
+            },
+            "travel": {
+                "detection": "calorie_surplus_prompts_question; travel_requires_confirmation",
+                "single_day_surplus_threshold_kcal": CONTEXT_SINGLE_SURPLUS_MKCAL / 1000,
+                "repeated_day_surplus_threshold_kcal": CONTEXT_REPEATED_SURPLUS_MKCAL / 1000,
+                "repeated_day_count": 2,
+                "repeat_window_days": CONTEXT_REPEAT_WINDOW_DAYS,
+                "action": "ask_trip_or_one_off; if_trip_ask_return_date; save_user_answer",
+                "recovery_start": "day_after_confirmed_return_in_accounting_timezone",
+                "unknown_return": "pause_additional_deficit_without_guessing",
+            },
+            "day_completion": "User confirms all intake logged via nutrition_review_day.",
             "document_ref": "docs/energy-credit-policy.md",
         }
 
@@ -1327,6 +1528,10 @@ class NutritionRepository:
             active_goals_by_date[goal_date] = active_goal
             goal_date += timedelta(days=1)
 
+        trips, reviews = self._context_facts(timezone)
+        travel_signals: list[dict[str, Any]] = []
+        outstanding_mkcal = 0
+        unconfirmed_dates: list[str] = []
         pending: dict[date, list[tuple[date, int, int]]] = {}
         internal: dict[date, dict[str, Any]] = {}
         current_date = scan_start
@@ -1337,7 +1542,26 @@ class NutritionRepository:
             deficit_mkcal = 0 if active_goal is None else int(active_goal["deficit_mkcal"])
             ordinary_mkcal = base_mkcal - deficit_mkcal
 
+            debit_active = current_date >= DEBIT_EFFECTIVE_FROM
+            opening_debit_mkcal = outstanding_mkcal
             candidates = pending.get(current_date, [])
+            suppressed_recovery_mkcal = 0
+            if debit_active and opening_debit_mkcal > 0:
+                kept_candidates = []
+                for candidate in candidates:
+                    if internal[candidate[0]]["exceptional_activity"]:
+                        kept_candidates.append(candidate)
+                    else:
+                        suppressed_recovery_mkcal += candidate[2]
+                        internal[candidate[0]]["recovery_schedule"].append(
+                            {
+                                "date": current_date,
+                                "day_offset": candidate[1],
+                                "candidate_mkcal": candidate[2],
+                                "scheduled_mkcal": 0,
+                            }
+                        )
+                candidates = kept_candidates
             allocated = self._proportional_cap(candidates, deficit_mkcal)
             incoming_mkcal = sum(item[3] for item in allocated)
             for source_date, offset, candidate_mkcal, scheduled_mkcal in allocated:
@@ -1365,6 +1589,53 @@ class NutritionRepository:
             intake_mkcal = intake_by_day.get(current_date, 0)
             intake_complete = intake_complete_by_day.get(current_date, True)
             provisional = current_date >= today
+            review = reviews.get(current_date.isoformat(), {})
+            day_confirmed = bool(review.get("intake_complete", False))
+            exceptional = (
+                credited_mkcal >= EXCEPTIONAL_BURN_MKCAL
+                or sum(int(row["duration_milliseconds"]) for row in day_trainings)
+                >= EXCEPTIONAL_DURATION_MS
+                or bool(review.get("exceptional_activity", False))
+            )
+            previous_exceptional = internal.get(current_date - timedelta(days=1), {}).get(
+                "exceptional_activity", False
+            )
+            protected_incoming = sum(
+                item[3] for item in allocated if internal[item[0]]["exceptional_activity"]
+            )
+            if debit_active and current_date <= today and goal is not None:
+                observed_surplus = max(0, intake_mkcal - base_mkcal - credited_mkcal)
+                if observed_surplus >= CONTEXT_REPEATED_SURPLUS_MKCAL:
+                    travel_signals.append(
+                        {
+                            "date": current_date.isoformat(),
+                            "surplus_kcal": _unscale(observed_surplus, 1_000),
+                            "intake_kcal": _unscale(intake_mkcal, 1_000),
+                            "estimated_maintenance_kcal": _unscale(
+                                base_mkcal + credited_mkcal, 1_000
+                            ),
+                            "provisional": provisional or not day_confirmed or not intake_complete,
+                        }
+                    )
+            travel = travel_context(current_date, trips, travel_signals)
+            pause_reasons = []
+            if travel["adjustment_paused"]:
+                pause_reasons.append(
+                    "travel" if travel["status"] == "confirmed" else "awaiting_overshoot_context"
+                )
+            if exceptional:
+                pause_reasons.append("exceptional_activity")
+            if previous_exceptional:
+                pause_reasons.append("day_after_exceptional_activity")
+            if protected_incoming:
+                pause_reasons.append("protected_recovery")
+            if deficit_mkcal == 0:
+                pause_reasons.append("no_planned_deficit")
+            adjustment_mkcal = (
+                min(DAILY_ADJUSTMENT_MKCAL, opening_debit_mkcal, max(0, ordinary_mkcal))
+                if debit_active and not pause_reasons and goal is not None
+                else 0
+            )
             status = "ok"
             exercise_used_mkcal: int | None = None
             unused_exercise_mkcal: int | None = None
@@ -1386,6 +1657,46 @@ class NutritionRepository:
                 next_deficit_mkcal = 0 if next_goal is None else int(next_goal["deficit_mkcal"])
                 recovery_pool_cap_mkcal = next_deficit_mkcal * 1_000 // RECOVERY_WEIGHTS_PERMILLE[0]
                 recovery_pool_mkcal = min(unused_exercise_mkcal, recovery_pool_cap_mkcal)
+                # Ordinary carryover yields to outstanding debit. Exceptional recovery is protected.
+                if debit_active and opening_debit_mkcal > 0 and not exceptional:
+                    recovery_pool_mkcal = 0
+
+            debit_added_mkcal = 0
+            debit_repaid_mkcal = 0
+            repayment_from_exercise_mkcal = 0
+            repayment_eligible = (
+                debit_active
+                and current_date < today
+                and day_confirmed
+                and intake_complete
+                and goal is not None
+            )
+            if debit_active and current_date <= today and goal is not None:
+                debit_added_mkcal = max(0, intake_mkcal - base_mkcal - credited_mkcal)
+                if not day_confirmed or not intake_complete or provisional:
+                    unconfirmed_dates.append(current_date.isoformat())
+                if repayment_eligible:
+                    # Unused incoming recovery expires; it cannot become debt repayment.
+                    extra_deficit = max(
+                        0,
+                        ordinary_mkcal
+                        + credited_mkcal
+                        + (incoming_used_mkcal or 0)
+                        - intake_mkcal
+                        - (recovery_pool_mkcal or 0),
+                    )
+                    debit_repaid_mkcal = min(opening_debit_mkcal, extra_deficit)
+                    repayment_from_exercise_mkcal = min(
+                        debit_repaid_mkcal,
+                        max(0, (unused_exercise_mkcal or 0) - (recovery_pool_mkcal or 0)),
+                    )
+                    # If this day clears debit, remaining ordinary exercise credit can recover.
+                    if not exceptional and debit_repaid_mkcal == opening_debit_mkcal:
+                        recovery_pool_mkcal = min(
+                            max(0, (unused_exercise_mkcal or 0) - repayment_from_exercise_mkcal),
+                            recovery_pool_cap_mkcal or 0,
+                        )
+                outstanding_mkcal = opening_debit_mkcal + debit_added_mkcal - debit_repaid_mkcal
 
             internal[current_date] = {
                 "date": current_date,
@@ -1406,6 +1717,32 @@ class NutritionRepository:
                 "recovery_pool_cap_mkcal": recovery_pool_cap_mkcal,
                 "recovery_pool_mkcal": recovery_pool_mkcal,
                 "recovery_schedule": [],
+                "exceptional_activity": exceptional,
+                "day_confirmed": day_confirmed,
+                "travel_context": travel,
+                "protected_incoming_mkcal": protected_incoming,
+                "recovery_source_provisional": provisional
+                or not intake_complete
+                or (debit_active and not day_confirmed),
+                "incoming_recovery_sources": [
+                    {
+                        "source_date": source.isoformat(),
+                        "scheduled_kcal": _unscale(amount, 1_000),
+                        "protected": internal[source]["exceptional_activity"],
+                        "provisional": internal[source]["recovery_source_provisional"],
+                    }
+                    for source, _offset, _candidate, amount in allocated
+                ],
+                "suppressed_recovery_mkcal": suppressed_recovery_mkcal,
+                "opening_debit_mkcal": opening_debit_mkcal,
+                "debit_added_mkcal": debit_added_mkcal,
+                "debit_repaid_mkcal": debit_repaid_mkcal,
+                "closing_debit_mkcal": outstanding_mkcal,
+                "repayment_from_exercise_mkcal": repayment_from_exercise_mkcal,
+                "adjustment_mkcal": adjustment_mkcal,
+                "pause_reasons": pause_reasons,
+                "repayment_eligible": repayment_eligible,
+                "unconfirmed_dates": list(unconfirmed_dates),
             }
             if recovery_pool_mkcal is not None and recovery_pool_mkcal > 0:
                 first = (recovery_pool_mkcal * RECOVERY_WEIGHTS_PERMILLE[0] + 500) // 1_000
@@ -1442,9 +1779,35 @@ class NutritionRepository:
                 "ordinary_target_kcal": _unscale(item["ordinary_mkcal"], 1_000),
                 "intake_kcal": _unscale(item["intake_mkcal"], 1_000),
                 "intake_complete": item["intake_complete"],
+                "day_intake_confirmed_complete": item["day_confirmed"],
+                "exceptional_activity": item["exceptional_activity"],
+                "travel_context": item["travel_context"],
+                "protected_incoming_recovery_kcal": _unscale(
+                    item["protected_incoming_mkcal"], 1_000
+                ),
+                "suppressed_recovery_kcal": _unscale(item["suppressed_recovery_mkcal"], 1_000),
+                "debit": {
+                    "active": current_date >= DEBIT_EFFECTIVE_FROM,
+                    "opening_kcal": _unscale(item["opening_debit_mkcal"], 1_000),
+                    "added_kcal": _unscale(item["debit_added_mkcal"], 1_000),
+                    "repaid_kcal": _unscale(item["debit_repaid_mkcal"], 1_000),
+                    "closing_kcal": _unscale(item["closing_debit_mkcal"], 1_000),
+                    "additional_deficit_kcal": _unscale(item["adjustment_mkcal"], 1_000),
+                    "pause_reasons": item["pause_reasons"],
+                    "repayment_eligible": item["repayment_eligible"],
+                    "balance_provisional": bool(item["unconfirmed_dates"]),
+                    "unconfirmed_dates": item["unconfirmed_dates"],
+                    "projected_eligible_days": (
+                        item["closing_debit_mkcal"] + DAILY_ADJUSTMENT_MKCAL - 1
+                    )
+                    // DAILY_ADJUSTMENT_MKCAL,
+                    "review_recommended": item["closing_debit_mkcal"]
+                    > (REVIEW_AFTER_ELIGIBLE_DAYS * DAILY_ADJUSTMENT_MKCAL),
+                },
                 "reported_training_burn_kcal": _unscale(item["reported_mkcal"], 1_000),
                 "credited_training_burn_kcal": _unscale(item["credited_mkcal"], 1_000),
                 "incoming_recovery_kcal": _unscale(item["incoming_mkcal"], 1_000),
+                "incoming_recovery_sources": item["incoming_recovery_sources"],
                 "incoming_recovery_used_kcal": _unscale(item["incoming_used_mkcal"], 1_000),
                 "incoming_recovery_remaining_kcal": _unscale(incoming_remaining, 1_000),
                 "incoming_recovery_expired_kcal": (
@@ -1453,13 +1816,19 @@ class NutritionRepository:
                 "planned_baseline_kcal": (
                     None
                     if item["goal"] is None
-                    else _unscale(item["ordinary_mkcal"] + item["incoming_mkcal"], 1_000)
+                    else _unscale(
+                        item["ordinary_mkcal"] + item["incoming_mkcal"] - item["adjustment_mkcal"],
+                        1_000,
+                    )
                 ),
                 "available_ceiling_kcal": (
                     None
                     if item["goal"] is None
                     else _unscale(
-                        item["ordinary_mkcal"] + item["incoming_mkcal"] + item["credited_mkcal"],
+                        item["ordinary_mkcal"]
+                        + item["incoming_mkcal"]
+                        + item["credited_mkcal"]
+                        - item["adjustment_mkcal"],
                         1_000,
                     )
                 ),
@@ -1477,6 +1846,8 @@ class NutritionRepository:
                         "date": value["date"].isoformat(),
                         "day_offset": value["day_offset"],
                         "candidate_kcal": _unscale(value["candidate_mkcal"], 1_000),
+                        "provisional": item["recovery_source_provisional"],
+                        "protected": item["exceptional_activity"],
                         "scheduled_kcal": _unscale(value["scheduled_mkcal"], 1_000),
                         "expired_kcal": _unscale(
                             value["candidate_mkcal"] - value["scheduled_mkcal"], 1_000
@@ -1490,10 +1861,16 @@ class NutritionRepository:
                     if recovery_pool is None
                     else _unscale(recovery_pool - scheduled_total, 1_000)
                 ),
+                "exercise_credit_used_for_debit_kcal": _unscale(
+                    item["repayment_from_exercise_mkcal"], 1_000
+                ),
                 "exercise_credit_expired_at_creation_kcal": (
                     None
                     if unused_exercise is None
-                    else _unscale(unused_exercise - scheduled_total, 1_000)
+                    else _unscale(
+                        unused_exercise - scheduled_total - item["repayment_from_exercise_mkcal"],
+                        1_000,
+                    )
                 ),
             }
             current_date += timedelta(days=1)

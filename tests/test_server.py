@@ -8,7 +8,7 @@ from mcp_nutrition_db.repository import NutritionRepository
 from mcp_nutrition_db.server import create_server
 
 
-def test_server_advertises_fourteen_tools_with_safe_annotations(
+def test_server_advertises_seventeen_tools_with_safe_annotations(
     repository: NutritionRepository,
 ) -> None:
     server = create_server(repository)
@@ -29,6 +29,9 @@ def test_server_advertises_fourteen_tools_with_safe_annotations(
         "nutrition_delete_training",
         "nutrition_list_trainings",
         "nutrition_get_energy_policy",
+        "nutrition_get_energy_context",
+        "nutrition_set_trip",
+        "nutrition_review_day",
     }
     assert tools["nutrition_get_entry"].annotations.readOnlyHint is True
     assert tools["nutrition_list_entries"].annotations.readOnlyHint is True
@@ -102,7 +105,7 @@ def test_streamable_http_initializes_and_calls_policy(
             )
             assert policy.status_code == 200
             structured = policy.json()["result"]["structuredContent"]
-            assert structured["policy_id"] == "energy-credit/v2"
+            assert structured["policy_id"] == "energy-credit/v3"
             assert structured["recovery_pool_cap"] == (
                 "next_day_planned_deficit / first_recovery_weight"
             )

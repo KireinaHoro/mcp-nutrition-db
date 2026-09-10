@@ -44,7 +44,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert "durable nutrition record" in (initialized.instructions or "")
 
             tools = await session.list_tools()
-            assert len(tools.tools) == 14
+            assert len(tools.tools) == 17
 
             logged = await session.call_tool(
                 "nutrition_log_entry",
@@ -121,7 +121,48 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             policy = await session.call_tool("nutrition_get_energy_policy", {})
             assert policy.isError is False
             assert policy.structuredContent is not None
-            assert policy.structuredContent["policy_id"] == "energy-credit/v2"
+            assert policy.structuredContent["policy_id"] == "energy-credit/v3"
+
+            trip = await session.call_tool(
+                "nutrition_set_trip",
+                {
+                    "start_date": "2026-09-09",
+                    "title": "Test trip",
+                    "return_date": "2026-09-11",
+                    "reason": "User confirmed itinerary",
+                },
+            )
+            assert not trip.isError
+            assert trip.structuredContent["record"]["revision"] == 1
+            context = await session.call_tool(
+                "nutrition_get_energy_context",
+                {
+                    "on_date": "2026-09-10",
+                },
+            )
+            assert not context.isError
+            assert (
+                context.structuredContent["travel_context"]["recovery_start_date"] == "2026-09-12"
+            )
+            reviewed = await session.call_tool(
+                "nutrition_review_day",
+                {
+                    "on_date": "2026-08-27",
+                    "intake_complete": True,
+                    "reason": "User confirms all meals logged",
+                },
+            )
+            assert not reviewed.isError
+            assert reviewed.structuredContent["record"]["revision"] == 1
+            conflict = await session.call_tool(
+                "nutrition_review_day",
+                {
+                    "on_date": "2026-08-27",
+                    "intake_complete": True,
+                    "reason": "Stale revision",
+                },
+            )
+            assert conflict.isError
 
             summary = await session.call_tool(
                 "nutrition_summarize",

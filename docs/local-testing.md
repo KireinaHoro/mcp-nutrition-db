@@ -24,14 +24,12 @@ name, outcome, duration, MCP request ID, generated correlation ID, and error
 class when applicable. Arguments, results, meal notes, and credentials are not
 logged. Use `--log-level` to change the default `info` threshold.
 
-The committed `.codex/config.toml` registers that endpoint as the optional
-`nutrition` MCP server and asks for approval only for writes. Codex reads MCP
-configuration when a client session starts, so open a new Codex session from
-this trusted repository after the service is listening. An already-running
-session does not dynamically acquire the new tools.
+The working Nutrition DB connector exposes the cloud-registered tools directly.
+The obsolete project-local Codex MCP registration has been removed. A disposable
+local endpoint can still be attached explicitly for development; it is separate
+from the production connector and must not be assumed to contain live records.
 
-ChatGPT Web does not read `.codex/config.toml`; it reaches the same local server
-through Secure MCP Tunnel instead.
+ChatGPT reaches production through Secure MCP Tunnel.
 
 ## Initialize the local tunnel profile
 

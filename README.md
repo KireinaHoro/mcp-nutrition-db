@@ -17,7 +17,7 @@ so it does not require an nginx route or a public MCP endpoint.
   phases, acceptance criteria, progress, and deferred work.
 - [Exercise and recovery energy-credit policy](docs/energy-credit-policy.md)
   defines confidence-adjusted training allowance, non-recurring recovery-day
-  credits, and how that policy should be presented over MCP.
+  credits, bounded surplus repayment, calorie-based travel-context prompts, and MCP presentation.
 - [Local testing](docs/local-testing.md) explains direct Codex attachment and
   the temporary Secure MCP Tunnel workflow for ChatGPT Web.
 
@@ -27,7 +27,7 @@ log before or alongside the code that depends on them.
 
 ## Current status
 
-The local MVP implements the SQLite schema and all fourteen MCP tools. Repository,
+The local MVP implements the SQLite schema and all seventeen MCP tools. Repository,
 schema, calendar, MCP process, Streamable HTTP, package, and NixOS evaluation
 checks pass; see the implementation plan for the exact verified state.
 
