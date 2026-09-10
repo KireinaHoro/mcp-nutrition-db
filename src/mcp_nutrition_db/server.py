@@ -31,7 +31,6 @@ from .models import (
     TrainingEvidence,
     TrainingMeasurementMethod,
     TrainingSource,
-    TripInput,
     validate_timezone,
 )
 from .observability import logged_tool_call
@@ -49,11 +48,10 @@ validates and stores the resulting structured estimates.
 Use nutrition_log_entry once for a new meal, then nutrition_update_entry when the user corrects
 portions or ingredients. Preserve per-component source provenance and uncertainty. For requests
 about today, pass a relative_day window instead of calculating timestamps. Preserve training
-measurement method, evidence, and confidence. Follow travel_context.action_required: ask whether
-surplus days reflect an ongoing trip or a one-off; calories alone do not establish travel.
-If travelling, ask when they return; never guess the return date. Record confirmed itineraries
-with nutrition_set_trip in the usual accounting timezone. Extra deficit stays paused until
-travel ends. Use nutrition_review_day only
+measurement method, evidence, and confidence. Outstanding surplus produces a bounded additional
+deficit on subsequent eligible days. Repeated overshoots extend repayment without increasing the
+daily adjustment. Do not classify overshoots or ask about travel or return dates for accounting.
+Use nutrition_review_day only
 when the user explicitly confirms the day's intake is fully logged; never infer completion from
 intake_complete, which describes nutrient fields only. Flag planned exceptional activity before
 it occurs. Fuel demanding exercise and recovery first; debit is bookkeeping, not an instruction
@@ -143,7 +141,7 @@ def create_server(
             try:
                 from .models import LogEntryInput
 
-                result = repository.create_entry(
+                return repository.create_entry(
                     LogEntryInput(
                         occurred_at=occurred_at,
                         kind=kind,
@@ -155,8 +153,6 @@ def create_server(
                         force_new=force_new,
                     )
                 )
-                result["energy_context"] = repository.get_energy_context(timezone=default_timezone)
-                return result
             except Exception as error:
                 raise _translate_error(error) from error
 
@@ -370,8 +366,7 @@ def create_server(
             "Sum nutrition over a bounded window, grouped by day or whole range. For today's "
             "macros and energy balance, use a relative_day window. Energy results distinguish "
             "ordinary target, protected recovery, exercise allowance, and debit adjustment. "
-            "Follow travel_context prompts to ask the user their return date; check debit's "
-            "unconfirmed_dates before claiming repayment."
+            "Check debit's unconfirmed_dates before claiming repayment."
         ),
         annotations=READ_ONLY,
     )
@@ -425,7 +420,7 @@ def create_server(
         description=(
             "Get the nutrition goal and server-calculated energy balance effective on a date. "
             "Omit on_date for today; optionally include all configured goal versions. "
-            "Follow travel_context questions; nutrient completeness is not day completion."
+            "Nutrient completeness is not day completion."
         ),
         annotations=READ_ONLY,
     )
@@ -447,7 +442,7 @@ def create_server(
         name="nutrition_get_energy_policy",
         description=(
             "Return the active energy, recovery, and surplus policy. Call this when "
-            "explaining debit, travel prompts, activity pauses, allowances, confidence, or "
+            "explaining debit, activity pauses, allowances, confidence, or "
             "expiry; calculations in summaries and goals are already performed by the server."
         ),
         annotations=READ_ONLY,
@@ -457,60 +452,21 @@ def create_server(
             return repository.energy_policy()
 
     @server.tool(
-        name="nutrition_get_energy_context",
+        name="nutrition_get_day_review",
         description=(
-            "Read saved trips, their revisions, the selected day's completion review, and travel "
-            "prompts. Follow travel_context questions; never infer a return "
-            "date. Use this before correcting a trip or day review."
+            "Read the selected day's completion and exceptional-activity review, including "
+            "its revision. Use this before correcting a review; no record means revision 0."
         ),
         annotations=READ_ONLY,
     )
-    def nutrition_get_energy_context(
+    def nutrition_get_day_review(
         ctx: MCPContext,  # type: ignore[type-arg]
         on_date: date | None = None,
         timezone: str = default_timezone,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_get_energy_context", ctx):
+        with logged_tool_call("nutrition_get_day_review", ctx):
             try:
-                return repository.get_energy_context(on_date, timezone)
-            except Exception as error:
-                raise _translate_error(error) from error
-
-    @server.tool(
-        name="nutrition_set_trip",
-        description=(
-            "Record a user-confirmed trip, its return date, or a non-travel overshoot context. "
-            "Ask when they return; unknown is allowed and pauses the extra deficit. "
-            "Recovery starts the day after return. Use the accounting timezone throughout travel. "
-            "Identify trips by start_date and timezone; expected_revision is 0 for new records. "
-            "For a one-off use not_travelling with start_date and return_date bounding the "
-            "reviewed surplus dates. Use cancelled to cancel a saved trip."
-        ),
-        annotations=MUTATING,
-    )
-    def nutrition_set_trip(
-        start_date: date,
-        title: Annotated[str, Field(min_length=1, max_length=300)],
-        reason: Annotated[str, Field(min_length=1, max_length=500)],
-        ctx: MCPContext,  # type: ignore[type-arg]
-        return_date: date | None = None,
-        timezone: str = default_timezone,
-        status: Literal["active", "not_travelling", "cancelled"] = "active",
-        expected_revision: Annotated[int, Field(ge=0)] = 0,
-    ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_set_trip", ctx):
-            try:
-                return repository.set_trip(
-                    TripInput(
-                        start_date=start_date,
-                        return_date=return_date,
-                        timezone=timezone,
-                        title=title,
-                        status=status,
-                        expected_revision=expected_revision,
-                        reason=reason,
-                    )
-                )
+                return repository.get_day_review(on_date, timezone)
             except Exception as error:
                 raise _translate_error(error) from error
 

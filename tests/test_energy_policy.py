@@ -15,7 +15,6 @@ from mcp_nutrition_db.models import (
     LogEntryInput,
     LogTrainingInput,
     TrainingChanges,
-    TripInput,
 )
 from mcp_nutrition_db.repository import NutritionRepository, RevisionConflictError
 
@@ -66,20 +65,6 @@ def complete(repo: NutritionRepository, day: str, **kwargs: Any) -> None:
     )
 
 
-def nontravel(
-    repo: NutritionRepository, start: str = "2026-09-09", end: str = "2026-09-30"
-) -> None:
-    repo.set_trip(
-        TripInput(
-            start_date=date.fromisoformat(start),
-            return_date=date.fromisoformat(end),
-            title="At home",
-            status="not_travelling",
-            reason="User confirmed non-travel context",
-        )
-    )
-
-
 def training(
     repo: NutritionRepository,
     day: str,
@@ -106,66 +91,60 @@ def balance(repo: NutritionRepository, day: str) -> dict[str, Any]:
     return repo.energy_balance(date.fromisoformat(day))
 
 
-def test_current_trip_is_detected_from_calories_without_meal_details(
+def test_current_trip_debit_applies_without_context_or_personal_records(
     repo: NutritionRepository,
 ) -> None:
     food(repo, "2026-09-09", 5307.1)
     result = balance(repo, "2026-09-10")
     assert result["debit"]["opening_kcal"] == 2807.1
-    assert result["debit"]["additional_deficit_kcal"] == 0
+    assert result["debit"]["additional_deficit_kcal"] == 200
     assert result["debit"]["balance_provisional"] is True
-    context = result["travel_context"]
-    assert context["status"] == "needs_context"
-    assert context["action_required"] == "ask_overshoot_context"
-    assert context["suggested_start_date"] == "2026-09-09"
-    assert context["evidence"][0]["surplus_kcal"] == 2807.1
+    assert result["debit"]["pause_reasons"] == []
+    assert "travel_context" not in result
     with sqlite3.connect(repo.database_path) as connection:
-        assert connection.execute("SELECT count(*) FROM trips").fetchone()[0] == 0
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+        assert "trips" not in tables
         assert connection.execute("SELECT count(*) FROM day_reviews").fetchone()[0] == 0
 
 
-def test_repeated_surplus_prompts_but_flight_words_and_fuelled_activity_do_not(
+def test_repeated_overshoots_extend_duration_without_stacking_or_questions(
     repo: NutritionRepository,
 ) -> None:
-    food(repo, "2026-09-09", 2700, "Inflight meal AY1512")
-    assert balance(repo, "2026-09-09")["travel_context"]["status"] == "none"
-    food(repo, "2026-09-10", 2800)
-    assert balance(repo, "2026-09-10")["travel_context"]["status"] == "none"
-    food(repo, "2026-09-12", 2800)
-    assert (
-        balance(repo, "2026-09-12")["travel_context"]["action_required"] == "ask_overshoot_context"
-    )
-    training(repo, "2026-09-12", 800, 60, "high")
-    assert balance(repo, "2026-09-12")["travel_context"]["status"] == "none"
+    for day, kcal in [("2026-09-09", 5300), ("2026-09-10", 3200), ("2026-09-11", 3500)]:
+        food(repo, day, kcal, "Travel meal")
+        complete(repo, day)
+    result = balance(repo, "2026-09-12")
+    assert result["debit"]["opening_kcal"] == 4500
+    assert result["debit"]["projected_eligible_days"] == 23
+    assert result["debit"]["additional_deficit_kcal"] == 200
+    assert result["planned_baseline_kcal"] == 1800
+    assert result["debit"]["pause_reasons"] == []
+    food(repo, "2026-09-12", 1800)
+    complete(repo, "2026-09-12")
+    assert balance(repo, "2026-09-12")["debit"]["closing_kcal"] == 4300
 
 
-def test_trip_return_unknown_changed_and_nontravel_context(repo: NutritionRepository) -> None:
-    food(repo, "2026-09-09", 5300)
-    trip = TripInput(start_date=date(2026, 9, 9), title="Trip", reason="Confirmed by user")
-    repo.set_trip(trip)
-    assert balance(repo, "2026-09-20")["travel_context"]["action_required"] == "ask_return_date"
-    with pytest.raises(RevisionConflictError):
-        repo.set_trip(trip)
-    repo.set_trip(
-        trip.model_copy(update={"expected_revision": 1, "return_date": date(2026, 9, 11)})
+def test_meal_details_do_not_change_accounting_and_reviews_are_audited(
+    repo: NutritionRepository,
+) -> None:
+    entry = food(repo, "2026-09-09", 5300, "Inflight meal; away for two weeks")
+    initial = balance(repo, "2026-09-10")
+    repo.update_entry(
+        entry["entry_id"],
+        expected_revision=1,
+        reason="Correct title",
+        changes=EntryChanges(title="Dinner at home"),
     )
-    assert balance(repo, "2026-09-11")["debit"]["additional_deficit_kcal"] == 0
-    assert balance(repo, "2026-09-12")["debit"]["additional_deficit_kcal"] == 200
-    assert balance(repo, "2026-09-12")["travel_context"]["action_required"] is None
-    repo.set_trip(
-        trip.model_copy(update={"expected_revision": 2, "return_date": date(2026, 9, 14)})
-    )
-    assert balance(repo, "2026-09-12")["debit"]["additional_deficit_kcal"] == 0
+    assert balance(repo, "2026-09-10") == initial
+    complete(repo, "2026-09-09")
+    assert repo.get_day_review(date(2026, 9, 9))["day_review"]["revision"] == 1
     with sqlite3.connect(repo.database_path) as connection:
-        assert (
-            connection.execute("SELECT count(*) FROM energy_context_revisions").fetchone()[0] == 3
-        )
+        assert connection.execute("SELECT count(*) FROM day_review_revisions").fetchone()[0] == 1
 
 
 def test_actual_repayment_not_target_or_ordinary_deficit_and_no_expiry(
     repo: NutritionRepository,
 ) -> None:
-    nontravel(repo)
     food(repo, "2026-09-09", 5300)
     complete(repo, "2026-09-09")
     food(repo, "2026-09-10", 2000)
@@ -186,7 +165,6 @@ def test_actual_repayment_not_target_or_ordinary_deficit_and_no_expiry(
 def test_missing_or_partial_intake_never_repays_and_reviews_can_reopen(
     repo: NutritionRepository,
 ) -> None:
-    nontravel(repo)
     food(repo, "2026-09-09", 5300)
     food(repo, "2026-09-10", 1800)
     assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 0
@@ -210,7 +188,6 @@ def test_missing_or_partial_intake_never_repays_and_reviews_can_reopen(
 def test_hike_reserves_recovery_before_repaying_and_pauses_restriction(
     repo: NutritionRepository,
 ) -> None:
-    nontravel(repo)
     food(repo, "2026-09-09", 5300)
     food(repo, "2026-09-12", 2455.94)
     training(repo, "2026-09-12")
@@ -234,7 +211,6 @@ def test_hike_reserves_recovery_before_repaying_and_pauses_restriction(
 def test_recovery_cannot_repay_debit_twice_and_clipped_reserve_expires(
     repo: NutritionRepository,
 ) -> None:
-    nontravel(repo)
     food(repo, "2026-09-09", 5300)
     for day in ["2026-09-12", "2026-09-13"]:
         training(repo, day)
@@ -260,7 +236,6 @@ def test_recovery_cannot_repay_debit_twice_and_clipped_reserve_expires(
 
 
 def test_ordinary_exercise_pays_debit_before_carryover(repo: NutritionRepository) -> None:
-    nontravel(repo)
     food(repo, "2026-09-09", 2700)
     training(repo, "2026-09-10", 600, 60, "high")
     food(repo, "2026-09-10", 2000)
@@ -276,7 +251,6 @@ def test_ordinary_exercise_pays_debit_before_carryover(repo: NutritionRepository
 def test_corrections_recalculate_future_debit_and_protected_recovery(
     repo: NutritionRepository,
 ) -> None:
-    nontravel(repo)
     entry = food(repo, "2026-09-09", 5300)
     hike = training(repo, "2026-09-12")
     food(repo, "2026-09-12", 2455.94)
@@ -295,7 +269,6 @@ def test_corrections_recalculate_future_debit_and_protected_recovery(
 
 
 def test_planned_activity_pauses_before_training_is_logged(repo: NutritionRepository) -> None:
-    nontravel(repo)
     food(repo, "2026-09-09", 5300)
     repo.review_day(
         DayReviewInput(
@@ -311,7 +284,6 @@ def test_planned_activity_pauses_before_training_is_logged(repo: NutritionReposi
 
 
 def test_last_partial_payment_and_missed_deficits_are_forgiven(repo: NutritionRepository) -> None:
-    nontravel(repo)
     food(repo, "2026-09-09", 2600)
     food(repo, "2026-09-10", 2200)
     complete(repo, "2026-09-10")
@@ -331,7 +303,6 @@ def test_effective_date_and_no_references_to_other_policies(repo: NutritionRepos
 
 
 def test_confirmed_day_with_unknown_calories_does_not_repay(repo: NutritionRepository) -> None:
-    nontravel(repo)
     food(repo, "2026-09-09", 5300)
     entry = food(repo, "2026-09-10", 1800)
     repo.update_entry(

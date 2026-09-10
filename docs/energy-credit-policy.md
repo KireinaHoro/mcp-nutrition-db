@@ -81,8 +81,6 @@ restriction without an active goal and positive planned deficit.
 
 Pause the additional restriction:
 
-- during a confirmed trip, including the return date;
-- while a calorie-surplus context question or return-date question is unresolved;
 - on an exceptional activity day and the following calendar day;
 - on any day receiving protected recovery from exceptional activity.
 
@@ -155,41 +153,24 @@ No additional restriction is requested on the hike day or its protected
 recovery days. This reuses historical numbers to illustrate allocation; it
 is not an intake recommendation for another hike.
 
-## Calorie-based context prompts and trips
+## Repeated overshoots need no classification
 
-Meal titles, flight numbers, restaurants, locations, and other narrative details
-are **not** used to detect trips. Calories do not establish whether someone is
-travelling. They trigger a context question when either:
+Debit is independent of whether an overshoot happened during travel, at a social
+meal, or at home. There are no trip records, return-date questions, context
+thresholds, or manually chosen repayment start dates. Additional deficit starts
+on the next day with opening debit, subject only to goal and activity/recovery
+eligibility.
 
-- one day has at least 500 kcal above estimated maintenance; or
-- at least two days within three local calendar days each have at least 250 kcal
-  above estimated maintenance.
+Another day above maintenance adds its actual surplus to the balance. Missing
+the adjusted target while remaining below maintenance creates no new debit:
+it simply achieves less or no repayment. Neither case stacks reductions or
+raises the next day's daily cap. The projected repayment period gets longer.
+For example, three days with surpluses of 2,800, 700, and 1,000 kcal leave 4,500
+kcal outstanding: an estimated 23 eligible days at 200 kcal extra, still with
+only a 200 kcal requested adjustment on each eligible day.
 
-Use exercise-adjusted maintenance so fuelling a large activity does not look
-like a surplus. Existing logged surplus can trigger the question before day
-completion, with its uncertainty exposed. The response includes dates, intake,
-estimated maintenance, and observed surplus as evidence.
-
-`travel_context.action_required = ask_overshoot_context` tells ChatGPT to ask
-whether this is an ongoing trip or a one-off. Only if travelling should it ask
-when the user is scheduled to get home. It must not guess or store a trip from
-calorie evidence alone. A user's explicit travel statement can also be recorded
-without waiting for any numerical threshold.
-
-`nutrition_set_trip` records the user's answer:
-
-- `active`: a confirmed trip, with a known or unknown return date;
-- `not_travelling`: a bounded range of surplus dates the user explained as
-  non-travel; this dismisses those prompts without pausing adjustments;
-- `cancelled`: a bounded cancellation of a saved trip/context.
-
-Records are keyed by accounting timezone and start date, use expected revisions,
-and have immutable audit snapshots. Active trips cannot overlap. A missing
-return date keeps extra restriction paused and asks for the return date.
-A known return starts eligibility on the following local day, subject to activity
-and recovery pauses. Adjusting the return date recalculates those pauses.
 Use the usual accounting timezone throughout travel to avoid shifting debit
-between ledgers. Later unexplained surplus dates can prompt a new question.
+between ledgers. Meal titles and travel details do not affect the arithmetic.
 
 ## MCP presentation and current-trip activation
 
@@ -197,15 +178,14 @@ The tool response explains only this active policy. It includes parameters,
 formulas, pauses, confirmation rules, and the stable document reference.
 Historical comparisons belong in repository history, not the tool response.
 
-The schema migration creates empty trip, day-review, and audit tables. It does
-not seed personal records, confirm days, or infer a return date. The effective
-date makes the existing 9 September surplus participate immediately from logged
-facts, with a context prompt and paused additional restriction. ChatGPT owns
-asking the user and recording their answers.
+The schema migration creates empty day-review and audit tables. It does not
+seed personal records or confirm days. The effective date makes the existing
+9 September surplus participate immediately from logged facts, with no context
+question needed. ChatGPT records explicit day-completion confirmations and
+planned exceptional activity when the user provides them.
 
 Daily summaries and goals expose the server-calculated debit ledger, pauses,
 provisional status, unconfirmed dates, projected eligible days, exceptional-day
-status, protected recovery, and the calorie-based context action. Logging a meal
-also returns current energy context so the prompt can be surfaced promptly.
-`nutrition_get_energy_context` provides saved records and revisions, including
-when a trip has no return date yet. Clients must not maintain a hidden balance.
+status and protected recovery. `nutrition_get_day_review` provides the selected
+day's saved review and revision before a correction. Reviews use expected
+revisions and immutable audit snapshots. Clients must not maintain a hidden balance.

@@ -338,26 +338,6 @@ class GoalInput(StrictModel):
         return self
 
 
-class TripInput(StrictModel):
-    start_date: date
-    return_date: date | None = None
-    timezone: str = DEFAULT_TIMEZONE
-    title: str = Field(min_length=1, max_length=300)
-    status: Literal["active", "not_travelling", "cancelled"] = "active"
-    expected_revision: int = Field(default=0, ge=0)
-    reason: str = Field(min_length=1, max_length=500)
-
-    _valid_timezone = field_validator("timezone")(validate_timezone)
-
-    @model_validator(mode="after")
-    def valid_dates(self) -> TripInput:
-        if self.status != "active" and self.return_date is None:
-            raise ValueError("a non-travel or cancelled context requires a bounded return_date")
-        if self.return_date is not None and self.return_date < self.start_date:
-            raise ValueError("return_date must be on or after start_date")
-        return self
-
-
 class DayReviewInput(StrictModel):
     on_date: date
     timezone: str = DEFAULT_TIMEZONE
