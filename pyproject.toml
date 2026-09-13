@@ -36,3 +36,6 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.13"
 strict = true
 packages = ["mcp_nutrition_db"]
+
+[tool.setuptools.package-data]
+mcp_nutrition_db = ["energy-credit-policy.md"]

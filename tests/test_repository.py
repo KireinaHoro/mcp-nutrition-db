@@ -81,7 +81,7 @@ def test_v1_goal_migrates_calorie_target_to_base_burn(tmp_path: Path) -> None:
     assert goal["base_burn_kcal"] == 2_000
     assert goal["targets"]["calories_kcal"] is None
     assert goal["energy_budget"]["ordinary_target_kcal"] == 2_000
-    assert goal["energy_budget"]["policy_id"] == "energy-credit/v4"
+    assert goal["energy_budget"]["policy_id"] == "energy-credit/v5"
 
 
 def test_v2_training_migrates_with_conservative_provenance(tmp_path: Path) -> None:
@@ -377,7 +377,7 @@ def test_confidence_adjustment_and_recovery_weights(repository: NutritionReposit
     )
 
     balance = repository.energy_balance(date(2026, 8, 27))
-    assert balance["policy_id"] == "energy-credit/v4"
+    assert balance["policy_id"] == "energy-credit/v5"
     assert balance["reported_training_burn_kcal"] == 1_200
     assert balance["credited_training_burn_kcal"] == 960
     assert balance["unused_exercise_credit_kcal"] == 960

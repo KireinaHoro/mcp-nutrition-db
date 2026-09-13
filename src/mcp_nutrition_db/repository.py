@@ -1329,7 +1329,7 @@ class NutritionRepository:
             "daily_cap": "destination_planned_deficit",
             "collision_handling": "proportional",
             "overflow": "expire",
-            "missed_allocation": "expire",
+            "missed_allocation": "repay_opening_debit_on_settlement_then_expire",
             "ordinary_target_formula": "base_burn - deficit",
             "planned_baseline_formula": "ordinary_target + incoming_recovery - debit_adjustment",
             "available_ceiling_formula": ("planned_baseline + credited_training_burn"),
@@ -1348,7 +1348,11 @@ class NutritionRepository:
                 "daily_additional_deficit_cap_kcal": 200,
                 "balance_cap": None,
                 "expiry": None,
-                "repayment": "actual_extra_deficit_after_protected_recovery_reserve",
+                "repayment": "unused_unadjusted_budget_after_source_recovery_reserve",
+                "repayment_formula": (
+                    "min(opening_debit, max(0, ordinary_target + incoming_recovery + "
+                    "credited_exercise - intake - reserved_source_pool))"
+                ),
                 "repayment_daily_cap": None,
                 "repayment_requires": "past_local_day; at_least_one_intake_entry; known_calories",
                 "unsettled_surplus": "accrue_as_provisional_lower_bound",
@@ -1378,6 +1382,7 @@ class NutritionRepository:
                 ),
             },
             "document_ref": "docs/energy-credit-policy.md",
+            "policy_text": Path(__file__).with_name("energy-credit-policy.md").read_text(),
         }
 
     @staticmethod
@@ -1592,6 +1597,7 @@ class NutritionRepository:
             debit_added_mkcal = 0
             debit_repaid_mkcal = 0
             repayment_from_exercise_mkcal = 0
+            repayment_from_incoming_mkcal = 0
             repayment_eligible = (
                 debit_active
                 and current_date < today
@@ -1604,12 +1610,12 @@ class NutritionRepository:
                 if not intake_logged or not intake_complete or provisional:
                     unsettled_dates.append(current_date.isoformat())
                 if repayment_eligible:
-                    # Unused incoming recovery expires; it cannot become debt repayment.
+                    # Repay unused unadjusted budget, including incoming recovery.
                     extra_deficit = max(
                         0,
                         ordinary_mkcal
                         + credited_mkcal
-                        + (incoming_used_mkcal or 0)
+                        + incoming_mkcal
                         - intake_mkcal
                         - (recovery_pool_mkcal or 0),
                     )
@@ -1617,6 +1623,10 @@ class NutritionRepository:
                     repayment_from_exercise_mkcal = min(
                         debit_repaid_mkcal,
                         max(0, (unused_exercise_mkcal or 0) - (recovery_pool_mkcal or 0)),
+                    )
+                    repayment_from_incoming_mkcal = min(
+                        debit_repaid_mkcal - repayment_from_exercise_mkcal,
+                        incoming_mkcal - (incoming_used_mkcal or 0),
                     )
                     # If this day clears debit, remaining ordinary exercise credit can recover.
                     if not exceptional and debit_repaid_mkcal == opening_debit_mkcal:
@@ -1640,6 +1650,7 @@ class NutritionRepository:
                 "credited_mkcal": credited_mkcal,
                 "incoming_mkcal": incoming_mkcal,
                 "incoming_used_mkcal": incoming_used_mkcal,
+                "incoming_repaid_mkcal": repayment_from_incoming_mkcal,
                 "exercise_used_mkcal": exercise_used_mkcal,
                 "unused_exercise_mkcal": unused_exercise_mkcal,
                 "recovery_pool_cap_mkcal": recovery_pool_cap_mkcal,
@@ -1738,8 +1749,16 @@ class NutritionRepository:
                 "incoming_recovery_sources": item["incoming_recovery_sources"],
                 "incoming_recovery_used_kcal": _unscale(item["incoming_used_mkcal"], 1_000),
                 "incoming_recovery_remaining_kcal": _unscale(incoming_remaining, 1_000),
+                "incoming_recovery_repaid_kcal": _unscale(item["incoming_repaid_mkcal"], 1_000),
                 "incoming_recovery_expired_kcal": (
-                    _unscale(incoming_remaining, 1_000) if current_date < today else None
+                    _unscale(
+                        None
+                        if incoming_remaining is None
+                        else incoming_remaining - item["incoming_repaid_mkcal"],
+                        1_000,
+                    )
+                    if current_date < today
+                    else None
                 ),
                 "planned_baseline_kcal": (
                     None

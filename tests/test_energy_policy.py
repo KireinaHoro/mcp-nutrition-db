@@ -331,7 +331,7 @@ def test_effective_date_and_no_references_to_other_policies(repo: NutritionRepos
     food(repo, "2026-09-08", 10000)
     assert balance(repo, "2026-09-09")["debit"]["opening_kcal"] == 0
     policy = json.dumps(repo.energy_policy())
-    assert "energy-credit/v4" in policy
+    assert "energy-credit/v5" in policy
     assert all(version not in policy for version in ["v1", "v2", "v3"])
 
 
@@ -377,3 +377,49 @@ def test_day_with_unknown_calories_does_not_repay(repo: NutritionRepository) -> 
     assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 200
     repo.delete_entry(entry["entry_id"], expected_revision=3, reason="Wrong entry")
     assert balance(repo, "2026-09-10")["debit"]["repaid_kcal"] == 0
+
+
+@pytest.mark.parametrize("intake, repaid", [(2500, 0), (2300, 200), (2000, 500), (1900, 600)])
+def test_unused_recovery_repays_after_midnight(
+    repo: NutritionRepository, intake: float, repaid: float
+) -> None:
+    food(repo, "2026-09-09", 5300)
+    training(repo, "2026-09-12")
+    food(repo, "2026-09-12", 2455.94)
+    food(repo, "2026-09-13", intake)
+    repo.clock = lambda: datetime(2026, 9, 13, 21, 59, tzinfo=UTC)
+    assert balance(repo, "2026-09-13")["debit"]["repaid_kcal"] == 0
+    repo.clock = lambda: datetime(2026, 9, 13, 22, tzinfo=UTC)
+    result = balance(repo, "2026-09-13")
+    assert result["debit"]["additional_deficit_kcal"] == 0
+    assert result["debit"]["repaid_kcal"] == repaid
+    assert result["debit"]["closing_kcal"] == pytest.approx(1122.34 - repaid)
+    assert result["incoming_recovery_repaid_kcal"] == min(repaid, 500)
+    assert result["incoming_recovery_expired_kcal"] == 0
+    assert balance(repo, "2026-09-12")["debit"]["repaid_kcal"] == 1677.66
+    late = food(repo, "2026-09-13", 700)
+    assert balance(repo, "2026-09-13")["debit"]["repaid_kcal"] == 0
+    repo.delete_entry(late["entry_id"], expected_revision=1, reason="Duplicate")
+    assert balance(repo, "2026-09-13")["debit"]["repaid_kcal"] == repaid
+
+
+def test_recovery_repayment_capped_at_debit_and_remainder_expires(
+    repo: NutritionRepository,
+) -> None:
+    food(repo, "2026-09-09", 4300)
+    training(repo, "2026-09-12")
+    food(repo, "2026-09-12", 2455.94)
+    food(repo, "2026-09-13", 2000)
+    result = balance(repo, "2026-09-13")
+    assert result["debit"]["repaid_kcal"] == 122.34
+    assert result["debit"]["closing_kcal"] == 0
+    assert result["incoming_recovery_repaid_kcal"] == 122.34
+    assert result["incoming_recovery_expired_kcal"] == 377.66
+
+
+def test_served_policy_is_complete_and_matches_document(repo: NutritionRepository) -> None:
+    policy = repo.energy_policy()
+    document = Path(__file__).parents[1] / "docs/energy-credit-policy.md"
+    assert policy["policy_text"] == document.read_text()
+    assert "unadjusted_budget =" in policy["policy_text"]
+    assert all(f"energy-credit/v{version}" not in json.dumps(policy) for version in range(1, 5))
