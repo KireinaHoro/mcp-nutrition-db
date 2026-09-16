@@ -5,6 +5,23 @@
 - Debit accounting begins: 2026-09-09, in the selected accounting timezone
 - Calculation basis: current policy, recalculated from current audited facts
 
+## Exceptional-day excess repays debt
+
+**Unused budget on an exceptional (extraordinary) activity day participates in
+debt repayment after the capped protected recovery pool is reserved.** The
+exceptional-day pause applies only to the requested additional intake restriction.
+It does not pause observed repayment or exempt the day's remaining unused budget.
+Repayment occurs when that past local day has logged intake with known calories,
+is capped by opening debt, and can exceed 200 kcal. Today's repayment remains
+provisional and is recorded as zero until settlement.
+
+Here, debt means the ledger's `debit`; excess budget means unused calorie
+allowance, not food eaten above maintenance. Protected recovery covers only the
+reserved pool, not all unused exercise credit. For example, 2,677.66 kcal of
+unused exercise minus a 1,000 kcal protected pool leaves 1,677.66 kcal for
+repayment when opening debt is sufficient, even though additional restriction
+is zero.
+
 ## Purpose and limits
 
 The service distinguishes ordinary intake targets, optional exercise allowance,
@@ -100,8 +117,10 @@ Pause the additional restriction:
 - on an exceptional activity day and the following calendar day;
 - on any day receiving protected recovery from exceptional activity.
 
-Pausing a requested restriction does not erase debit or prevent repayment from
-an actual, fully logged extra deficit. No reduction stacks or catches up after
+These are pauses of **additional restriction only**, not pauses of repayment.
+Exceptional days, the following day, and protected recovery days all use the
+same settlement and repayment formula above. Zero `additional_deficit` does not
+imply zero `actual_repayment`. No reduction stacks or catches up after
 a pause. `ceil(remaining_debit / 200)` is a projection in eligible days, not a
 calendar deadline; it assumes each such day actually achieves 200 kcal extra.
 A projection above 28 eligible days prompts review, without automatically
@@ -126,7 +145,9 @@ pool_cap = next_day_planned_deficit / 0.50
 ```
 
 On exceptional activity days, reserve `min(unused_exercise, pool_cap)` **before**
-repaying debit. Split the reserve into next-day / second-day / third-day
+repaying debit. The remaining unused budget repays opening debit on settlement;
+it is not excluded because the activity was exceptional. Split the reserve into
+next-day / second-day / third-day
 candidates of 50% / 30% / 20%. Their protected status survives outstanding debit.
 Incoming candidates share the destination day's planned-deficit cap. Collisions
 are reduced proportionally with deterministic integer rounding. Clipped allocations expire and are never redistributed or credited as repayment.

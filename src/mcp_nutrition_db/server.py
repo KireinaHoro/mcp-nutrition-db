@@ -51,6 +51,10 @@ about today, pass a relative_day window instead of calculating timestamps. Prese
 measurement method, evidence, and confidence. Outstanding surplus produces a bounded additional
 deficit on subsequent eligible days. Repeated overshoots extend repayment without increasing the
 daily adjustment. Do not classify overshoots or ask about travel or return dates for accounting.
+Exceptional (extraordinary) activity days DO repay opening debit from unused budget after
+reserving the capped protected recovery pool. Activity and recovery pauses apply only to
+requested additional restriction, never to observed repayment. Zero additional_deficit_kcal
+does not imply zero repaid_kcal. Settled repayment can exceed 200 kcal, up to opening debit.
 Past local days with logged intake and known calories settle automatically when queried.
 No daily confirmation or scheduled closing event is needed. Today's accounting is provisional;
 backdated additions, edits, and deletions recalculate subsequent balances. Empty days and days
@@ -367,7 +371,9 @@ def create_server(
             "Sum nutrition over a bounded window, grouped by day or whole range. For today's "
             "macros and energy balance, use a relative_day window. Energy results distinguish "
             "ordinary target, protected recovery, exercise allowance, and debit adjustment. "
-            "Check debit's unsettled_dates before claiming repayment."
+            "Exceptional-day unused budget repays debit after reserving capped recovery; "
+            "only additional restriction is paused. Read debit.repaid_kcal and unsettled_dates "
+            "when reporting repayment."
         ),
         annotations=READ_ONLY,
     )
