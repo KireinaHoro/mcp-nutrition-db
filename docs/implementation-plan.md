@@ -2,7 +2,7 @@
 
 - Status: Active
 - Last updated: 2026-09-24
-- Current phase: Fixed food inventory deployed and historical MCP scrub verified
+- Current phase: Offline USDA reference database deployed and verified
 
 This document is the project progress tracker. Update task checkboxes and the
 progress log in the same commit as completed work. A phase is complete only when
@@ -324,6 +324,8 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-09-13 | 2–4, 3A | Implement `energy-credit/v5` unused-budget repayment at day settlement, including unused incoming recovery. Package and serve the complete standalone policy text; expose recovery repayment separately from expiry. | 53 tests pass, including packaged MCP policy text, midnight recovery repayment, late corrections, and debit caps; Ruff, mypy, and x86_64-linux Nix flake checks pass. Production verification follows deployment. |
 | 2026-09-24 | Inventory, 6–8 | Implement and deploy schema v5 inventory, deterministic deduplication, USDA sourcing, and audited MCP history linking. Complete individual history review after backup and verify preserved nutrition and accounting. | 78 tests; Ruff, mypy, Nix checks; production MCP checks; deployment workflow `35990575991`; private scrub verification and exception report. |
 
+| 2026-09-24 | Offline USDA, 6–8 | Deploy checksum-pinned USDA bulk data and local-only MCP lookup. Preserve copied evidence across dataset changes and require explicit inventory revisions to adopt new composition. | 86 tests; Ruff, mypy, full package/module and kage builds; live offline MCP calls; unchanged inventory/history verification; app `ad4c4e0`, flakes `d77d5bb`. |
+
 
 ## Fixed food inventory (2026-09-24)
 
@@ -374,5 +376,14 @@ results, and verification artifacts are kept outside the source repository.
   negative source nutrients, duplicate IDs/checksums, and no-network behavior.
 - [x] Pass Ruff, mypy, and x86_64-linux Nix package/module checks; all 86 tests
   pass in the Nix build, including the stdio MCP integration test.
-- [ ] Deploy the pinned local database and verify production MCP lookups and
+- [x] Deploy the pinned local database and verify production MCP lookups and
   unchanged inventory/history.
+
+Production: application `ad4c4e0`, deployment pin `d77d5bb`. The full kage system
+build passed and was activated successfully; application and tunnel remain
+healthy. MCP search/detail calls report `local_database`, installed release
+coverage and immutable snapshots; repeat detail calls reuse the same snapshot.
+Both USDA tools advertise closed-world access. Branded-only searches explicitly
+report uninstalled coverage. Full inventory revisions/provenance and daily
+history/energy summaries compare equal before and after deployment. Application
+CI `35995127010` passed. No historical composition was automatically refreshed.
