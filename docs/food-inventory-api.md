@@ -1,4 +1,4 @@
-# Fixed food inventory: proposed MCP API
+# Fixed food inventory MCP API
 
 Status: accepted and implemented in schema v5. 2026-09-24.
 Deployment and the individually reviewed MCP history scrub are tracked in the
@@ -348,7 +348,7 @@ Returns affected entry IDs/revisions, linked component count, and verification
 that nutrition values and completeness are unchanged. This is an audited
 mutating operation; no deletion or nutrient rewrite takes place.
 
-Before the eventual full scrub, take and verify an online backup. Process plans
+Before a full scrub, take and verify an online backup. Process plans
 in batches and report linked, ambiguous, incompatible, and unmatched counts.
 Retain original audit history. Ambiguous product identity needs evidence before
 linking; the whole scrub must not silently collapse generic and branded foods.
@@ -385,7 +385,7 @@ than relabeling it USDA or replacing it with a less-specific generic profile.
 Importing historical evidence also preserves its original provenance; this
 workflow does not authorize replacing old nutrition during identity linking.
 
-Proposed USDA tools:
+USDA tools:
 
 | Tool | Inputs | Output |
 | --- | --- | --- |
@@ -470,7 +470,7 @@ rate limits are reported explicitly rather than treated as missing foods.
 
 ## 7. Persistence, errors, and acceptance criteria
 
-Likely additive schema: current `foods`, immutable `food_revisions`, indexed
+The additive schema includes current `foods`, immutable `food_revisions`, indexed
 food names/identifiers, nullable component inventory reference/amount metadata,
 and persisted link plans/results. Reuse entry revision snapshots and backup
 facilities. Store structured provenance/estimation snapshots without removing

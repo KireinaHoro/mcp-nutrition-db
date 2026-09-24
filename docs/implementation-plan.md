@@ -1,8 +1,8 @@
 # Implementation plan
 
 - Status: Active
-- Last updated: 2026-08-30
-- Current phase: Phase 2–4 and 3A — repository hardening and energy-credit accounting
+- Last updated: 2026-09-24
+- Current phase: Fixed food inventory deployed and historical MCP scrub verified
 
 This document is the project progress tracker. Update task checkboxes and the
 progress log in the same commit as completed work. A phase is complete only when
@@ -277,7 +277,7 @@ Acceptance criteria:
 
 ## Deferred backlog
 
-- [ ] Optional USDA or other nutrition database lookups with source attribution.
+- [x] USDA nutrition database lookups with source attribution (schema v5).
 - [ ] Barcode import.
 - [ ] Photo/object attachment storage with an explicit retention policy.
 - [ ] Data export in a documented interoperable format.
@@ -322,6 +322,7 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-09-10 | 2–4, 3A | Implement `energy-credit/v3`, audited day reviews, automatic surplus accounting, and recovery-first debit allocation. Remove defunct project-local MCP registration. | 45 tests, including MCP day-review calls; Ruff, mypy, and full x86_64-linux flake checks pass. No personal records are seeded; production verification follows deployment. |
 | 2026-09-10 | 2–4, 3A | Implement `energy-credit/v4` query-time settlement after local midnight, remove daily confirmation tools, retain optional audited activity plans, and recalculate backdated changes. | 47 tests pass, including midnight, late additions, edits, date moves, deletions, unknown calories, legacy flags, hike recovery, and MCP integration; Ruff and mypy pass. No live personal records changed. |
 | 2026-09-13 | 2–4, 3A | Implement `energy-credit/v5` unused-budget repayment at day settlement, including unused incoming recovery. Package and serve the complete standalone policy text; expose recovery repayment separately from expiry. | 53 tests pass, including packaged MCP policy text, midnight recovery repayment, late corrections, and debit caps; Ruff, mypy, and x86_64-linux Nix flake checks pass. Production verification follows deployment. |
+| 2026-09-24 | Inventory, 6–8 | Implement and deploy schema v5 inventory, deterministic deduplication, USDA sourcing, and audited MCP history linking. Complete individual history review after backup and verify preserved nutrition and accounting. | 78 tests; Ruff, mypy, Nix checks; production MCP checks; deployment workflow `35990575991`; private scrub verification and exception report. |
 
 
 ## Fixed food inventory (2026-09-24)
@@ -334,7 +335,28 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
   atomic revision checks, and preservation of nutrition/accounting snapshots.
 - [x] Complete expanded tests, static checks, and Nix package/module checks: 78
   tests pass; Ruff and mypy pass; x86_64-linux package/module flake checks pass.
-- [ ] Deploy the pinned application and verify production MCP schemas.
-- [ ] Trigger and verify production backup before the scrub.
-- [ ] Review every historical component and convert through MCP tool calls.
-- [ ] Verify unchanged nutrition/energy accounting and report remaining exceptions.
+- [x] Deploy the pinned application and verify production MCP schemas.
+- [x] Trigger and verify production backup before the scrub.
+- [x] Review every historical component and convert through MCP tool calls.
+- [x] Verify unchanged nutrition/energy accounting and report remaining exceptions.
+
+Production verification: application `cd3bf9c`, deployment pin `9839119`, and
+deployment workflow `35990575991` succeeded. Both application and tunnel units
+are active; readiness reports schema v5 and MCP discovery returns 28 tools.
+Live duplicate-name/USDA-ID rejection and fixed, fractional, and variable
+portion resolution checks pass.
+
+The pre-scrub backup completed successfully and its separately preserved
+snapshot checksum was verified before history linking. All active entries
+and components were individually reviewed. Catalog searches and creation,
+link previews, and three revision-checked apply batches used MCP tool calls:
+reviewed components now reference reusable foods. Remaining inline
+components have individual exception reasons (uncertain identity or
+inseparable mixed composition). No direct SQL history rewrite was used.
+
+Afterward, every meal was fetched through MCP again: all original component
+fields, entry nutrition/completeness, daily summaries, and energy accounting
+match the baseline exactly. USDA returned verified profiles before HTTP
+429; other imported profiles retain historical evidence, with explicit
+unavailability receipts where applicable. Private mappings, exceptions, tool
+results, and verification artifacts are kept outside the source repository.
