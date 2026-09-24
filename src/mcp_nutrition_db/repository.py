@@ -27,11 +27,13 @@ from .models import (
     ActivityPlanInput,
     EntryChanges,
     GoalInput,
+    InventoryComponentInput,
     ListEntriesInput,
     ListTrainingsInput,
     LogEntryInput,
     LogTrainingInput,
     NutritionValues,
+    RetainComponentInput,
     SummarizeInput,
     TrainingChanges,
     resolve_window,
@@ -48,7 +50,7 @@ NUTRIENTS: dict[str, tuple[str, int]] = {
     "sodium_mg": ("sodium_mg", 1),
 }
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 CREATE_RETRY_WINDOW = timedelta(minutes=10)
 ENERGY_POLICY_ID = POLICY_ID
 CONFIDENCE_MULTIPLIERS_PERMILLE = {"high": 1_000, "medium": 800, "low": 600}
@@ -308,6 +310,9 @@ class NutritionRepository:
         if self.database_path != ":memory:":
             Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
         self.migrate()
+        from .inventory import InventoryRepository
+
+        self.inventory = InventoryRepository(self)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5.0)
@@ -358,6 +363,18 @@ class NutritionRepository:
                     (4, _timestamp(self.clock())),
                 )
 
+            if 5 not in versions:
+                from .inventory_schema import MIGRATION_5
+
+                connection.commit()
+                connection.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    + MIGRATION_5
+                    + "\nINSERT INTO schema_migrations(version, applied_at) VALUES (5, '"
+                    + _timestamp(self.clock())
+                    + "');\nCOMMIT;"
+                )
+
     def schema_version(self) -> int:
         with self._connect() as connection:
             row = connection.execute(
@@ -371,38 +388,57 @@ class NutritionRepository:
         normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(normalized.encode()).hexdigest()
 
-    @staticmethod
     def _insert_components(
-        connection: sqlite3.Connection, entry_id: str, components: Iterable[Any]
+        self, connection: sqlite3.Connection, entry_id: str, components: Iterable[Any]
     ) -> None:
         for position, component in enumerate(components):
-            nutrition = _nutrient_db_values(component.nutrition)
+            if isinstance(component, InventoryComponentInput):
+                data = self.inventory._resolve(
+                    connection,
+                    component.food_id,
+                    component.food_revision,
+                    component.amount,
+                    component.portion_estimation,
+                )
+                data["portion_notes"] = component.portion_notes
+            elif isinstance(component, dict):
+                data = component
+            else:
+                data = component.model_dump(mode="json")
+            nutrition = _nutrient_db_values(NutritionValues.model_validate(data["nutrition"]))
+            inventory = data.get("inventory")
             connection.execute(
                 """
                 INSERT INTO entry_components(
                     component_id, entry_id, position, name, quantity, unit,
                     portion_notes, source_type, source_detail, calories_mkcal,
                     protein_mg, carbohydrate_mg, fat_mg, fiber_mg, sugar_mg,
-                    sodium_mg
+                    sodium_mg, food_id, food_revision, inventory_json, source_evidence_json
                 ) VALUES (
                     :component_id, :entry_id, :position, :name, :quantity, :unit,
                     :portion_notes, :source_type, :source_detail, :calories_mkcal,
                     :protein_mg, :carbohydrate_mg, :fat_mg, :fiber_mg, :sugar_mg,
-                    :sodium_mg
+                    :sodium_mg, :food_id, :food_revision, :inventory_json, :source_evidence_json
                 )
                 """,
                 {
-                    "component_id": _new_id(),
+                    "component_id": data.get("component_id", _new_id()),
                     "entry_id": entry_id,
                     "position": position,
-                    "name": component.name,
+                    "name": data["name"],
                     "quantity": None
-                    if component.quantity is None
-                    else str(Decimal(str(component.quantity))),
-                    "unit": component.unit,
-                    "portion_notes": component.portion_notes,
-                    "source_type": component.source.type.value,
-                    "source_detail": component.source.detail,
+                    if data.get("quantity") is None
+                    else str(Decimal(str(data["quantity"]))),
+                    "unit": data.get("unit"),
+                    "portion_notes": data.get("portion_notes"),
+                    "source_type": data["source"]["type"],
+                    "source_detail": data["source"].get("detail"),
+                    "food_id": None if inventory is None else inventory["food_id"],
+                    "food_revision": None if inventory is None else inventory["food_revision"],
+                    "inventory_json": None if inventory is None else json.dumps(inventory),
+                    "source_evidence_json": None
+                    if data.get("source_evidence") is None
+                    else json.dumps(data["source_evidence"]),
                     **nutrition,
                 },
             )
@@ -479,6 +515,12 @@ class NutritionRepository:
             "portion_notes": row["portion_notes"],
             "source": {"type": row["source_type"], "detail": row["source_detail"]},
             "nutrition": _nutrient_public_values(row),
+            "inventory": None
+            if row["inventory_json"] is None
+            else json.loads(row["inventory_json"]),
+            "source_evidence": None
+            if row["source_evidence_json"] is None
+            else json.loads(row["source_evidence_json"]),
         }
 
     @staticmethod
@@ -582,8 +624,22 @@ class NutritionRepository:
             )
             if "components" in fields:
                 assert changes.components is not None
+                prior = {c["component_id"]: c for c in current["components"]}
+                retained: set[str] = set()
+                components: list[Any] = []
+                for component in changes.components:
+                    if isinstance(component, RetainComponentInput):
+                        key = component.existing_component_id
+                        if key not in prior or key in retained:
+                            raise ValueError(
+                                "retained component must belong to this entry and be unique"
+                            )
+                        retained.add(key)
+                        components.append(prior[key])
+                    else:
+                        components.append(component)
                 connection.execute("DELETE FROM entry_components WHERE entry_id = ?", (entry_id,))
-                self._insert_components(connection, entry_id, changes.components)
+                self._insert_components(connection, entry_id, components)
 
             connection.execute(
                 """

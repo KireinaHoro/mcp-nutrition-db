@@ -8,7 +8,7 @@ from mcp_nutrition_db.repository import NutritionRepository
 from mcp_nutrition_db.server import create_server
 
 
-def test_server_advertises_sixteen_tools_with_safe_annotations(
+def test_server_advertises_inventory_tools_with_safe_annotations(
     repository: NutritionRepository,
 ) -> None:
     server = create_server(repository)
@@ -31,6 +31,18 @@ def test_server_advertises_sixteen_tools_with_safe_annotations(
         "nutrition_get_energy_policy",
         "nutrition_get_activity_plan",
         "nutrition_set_activity_plan",
+        "nutrition_inventory_status",
+        "nutrition_search_foods",
+        "nutrition_get_food",
+        "nutrition_create_food",
+        "nutrition_update_food",
+        "nutrition_archive_food",
+        "nutrition_resolve_food",
+        "nutrition_find_food_matches",
+        "nutrition_preview_food_links",
+        "nutrition_apply_food_links",
+        "nutrition_search_usda_foods",
+        "nutrition_get_usda_food",
     }
     assert tools["nutrition_get_entry"].annotations.readOnlyHint is True
     assert tools["nutrition_list_entries"].annotations.readOnlyHint is True

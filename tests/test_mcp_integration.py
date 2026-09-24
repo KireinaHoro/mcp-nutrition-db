@@ -44,7 +44,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert "durable nutrition record" in (initialized.instructions or "")
 
             tools = await session.list_tools()
-            assert len(tools.tools) == 16
+            assert len(tools.tools) == 28
 
             logged = await session.call_tool(
                 "nutrition_log_entry",

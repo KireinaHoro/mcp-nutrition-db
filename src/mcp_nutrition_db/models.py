@@ -110,6 +110,49 @@ class Estimation(StrictModel):
         return values
 
 
+class FoodQuantity(StrictModel):
+    quantity: float = Field(gt=0, le=1_000_000)
+    unit: Literal["g", "ml", "item"]
+
+
+class QuantityAmount(FoodQuantity):
+    type: Literal["quantity"]
+
+
+class ServingAmount(StrictModel):
+    type: Literal["serving"]
+    serving_key: str = Field(min_length=1, max_length=60)
+    count: float = Field(gt=0, le=1_000_000)
+
+
+class VariableServingAmount(StrictModel):
+    type: Literal["variable_serving"]
+    serving_key: str = Field(min_length=1, max_length=60)
+    whole_amount: FoodQuantity
+    fraction: float = Field(default=1, gt=0, le=1)
+
+
+type FoodAmount = Annotated[
+    QuantityAmount | ServingAmount | VariableServingAmount, Field(discriminator="type")
+]
+
+
+class InventoryComponentInput(StrictModel):
+    food_id: str = Field(min_length=1)
+    food_revision: int = Field(ge=1)
+    amount: FoodAmount
+    portion_notes: str | None = Field(default=None, max_length=1_000)
+    portion_estimation: Estimation | None = None
+
+
+class RetainComponentInput(StrictModel):
+    existing_component_id: str = Field(min_length=1)
+
+
+type MealComponentInput = ComponentInput | InventoryComponentInput
+type UpdatedComponentInput = MealComponentInput | RetainComponentInput
+
+
 def validate_timezone(value: str) -> str:
     try:
         ZoneInfo(value)
@@ -128,7 +171,7 @@ class LogEntryInput(StrictModel):
     occurred_at: datetime
     kind: EntryKind
     title: str = Field(min_length=1, max_length=300)
-    components: list[ComponentInput] = Field(min_length=1, max_length=100)
+    components: list[MealComponentInput] = Field(min_length=1, max_length=100)
     timezone: str = DEFAULT_TIMEZONE
     notes: str | None = Field(default=None, max_length=5_000)
     estimation: Estimation | None = None
@@ -144,7 +187,9 @@ class EntryChanges(StrictModel):
     kind: EntryKind | None = None
     title: str | None = Field(default=None, min_length=1, max_length=300)
     notes: str | None = Field(default=None, max_length=5_000)
-    components: list[ComponentInput] | None = Field(default=None, min_length=1, max_length=100)
+    components: list[UpdatedComponentInput] | None = Field(
+        default=None, min_length=1, max_length=100
+    )
     estimation: Estimation | None = None
 
     @field_validator("occurred_at")

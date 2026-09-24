@@ -322,3 +322,19 @@ restore has been rehearsed. Passing local unit tests alone is not completion.
 | 2026-09-10 | 2–4, 3A | Implement `energy-credit/v3`, audited day reviews, automatic surplus accounting, and recovery-first debit allocation. Remove defunct project-local MCP registration. | 45 tests, including MCP day-review calls; Ruff, mypy, and full x86_64-linux flake checks pass. No personal records are seeded; production verification follows deployment. |
 | 2026-09-10 | 2–4, 3A | Implement `energy-credit/v4` query-time settlement after local midnight, remove daily confirmation tools, retain optional audited activity plans, and recalculate backdated changes. | 47 tests pass, including midnight, late additions, edits, date moves, deletions, unknown calories, legacy flags, hike recovery, and MCP integration; Ruff and mypy pass. No live personal records changed. |
 | 2026-09-13 | 2–4, 3A | Implement `energy-credit/v5` unused-budget repayment at day settlement, including unused incoming recovery. Package and serve the complete standalone policy text; expose recovery repayment separately from expiry. | 53 tests pass, including packaged MCP policy text, midnight recovery repayment, late corrections, and debit caps; Ruff, mypy, and x86_64-linux Nix flake checks pass. Production verification follows deployment. |
+
+
+## Fixed food inventory (2026-09-24)
+
+- [x] Implement immutable catalog revisions, normalized identity-key constraints,
+  fixed and variable portions, inventory-backed meals, and component retention.
+- [x] Implement USDA search/detail tools, source snapshots, fallback receipts,
+  historical evidence references, and runtime credential configuration.
+- [x] Implement MCP discovery, coverage reporting, preview/apply history links,
+  atomic revision checks, and preservation of nutrition/accounting snapshots.
+- [x] Complete expanded tests, static checks, and Nix package/module checks: 78
+  tests pass; Ruff and mypy pass; x86_64-linux package/module flake checks pass.
+- [ ] Deploy the pinned application and verify production MCP schemas.
+- [ ] Trigger and verify production backup before the scrub.
+- [ ] Review every historical component and convert through MCP tool calls.
+- [ ] Verify unchanged nutrition/energy accounting and report remaining exceptions.

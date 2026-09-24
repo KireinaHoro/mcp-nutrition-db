@@ -13,6 +13,8 @@ so it does not require an nginx route or a public MCP endpoint.
 
 - [System design](docs/design.md) defines the product boundary, MCP tools, data
   model, security model, and NixOS deployment.
+- [Fixed food inventory API](docs/food-inventory-api.md) describes reusable
+  foods, portion resolution, history linking, and USDA-first sourcing.
 - [Implementation plan](docs/implementation-plan.md) is the source of truth for
   phases, acceptance criteria, progress, and deferred work.
 - [Exercise and recovery energy-credit policy](docs/energy-credit-policy.md)
@@ -27,9 +29,22 @@ log before or alongside the code that depends on them.
 
 ## Current status
 
-The local MVP implements the SQLite schema and all sixteen MCP tools. Repository,
+The service implements schema v5 and twenty-eight MCP tools, including the reusable
+food catalog, USDA lookup, portion resolution, and audited history linking. Repository,
 schema, calendar, MCP process, Streamable HTTP, package, and NixOS evaluation
 checks pass; see the implementation plan for the exact verified state.
+
+Ordinary meal components reference inventory foods and immutable revisions. Search
+before creating a food; normalized short names, USDA IDs, and product identifiers
+are unique even for archived foods. Historical links preserve existing nutrition
+snapshots instead of recalculating old meals.
+
+USDA retrieval uses `MCP_NUTRITION_USDA_API_KEY_FILE` or
+`MCP_NUTRITION_USDA_API_KEY`. The NixOS module defaults to the public, rate-limited
+`DEMO_KEY`; configure `services.mcp-nutrition-db.usdaApiKeyFile` for a private
+data.gov key, or disable demo access with `usdaUseDemoKey = false`. Keys are never
+tool arguments. Lookup failures return explicit fallback receipts; existing
+inventory and history remain usable offline.
 
 ## Development
 

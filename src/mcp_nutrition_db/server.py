@@ -15,7 +15,6 @@ from starlette.responses import JSONResponse
 from .models import (
     DEFAULT_TIMEZONE,
     ActivityPlanInput,
-    ComponentInput,
     Confidence,
     EntryChanges,
     EntryKind,
@@ -24,6 +23,7 @@ from .models import (
     ListEntriesInput,
     ListTrainingsInput,
     LogTrainingInput,
+    MealComponentInput,
     NutritionValues,
     QueryWindow,
     SummarizeInput,
@@ -97,10 +97,12 @@ def create_server(
     port: int = 8787,
     default_timezone: str = DEFAULT_TIMEZONE,
 ) -> FastMCP:
+    from .inventory_server import INVENTORY_INSTRUCTIONS, register_inventory_tools
+
     validate_timezone(default_timezone)
     server = FastMCP(
         "mcp-nutrition-db",
-        instructions=INSTRUCTIONS,
+        instructions=INSTRUCTIONS + INVENTORY_INSTRUCTIONS,
         host=host,
         port=port,
         streamable_http_path="/mcp",
@@ -125,9 +127,10 @@ def create_server(
     @server.tool(
         name="nutrition_log_entry",
         description=(
-            "Log one new meal or snack. Provide structured nutrition for every component and "
-            "identify whether each value was estimated, label-derived, restaurant-declared, "
-            "or from another source. Exact retries within ten minutes return the original entry."
+            "Log one new meal or snack. Prefer inventory references (food_id, food_revision, "
+            "amount) for ordinary components, including home-cooked ingredients. Search the "
+            "catalog first. Inline nutrition is for idiosyncratic exceptions with provenance. "
+            "Exact retries within ten minutes return the original entry."
         ),
         annotations=MUTATING,
     )
@@ -135,7 +138,7 @@ def create_server(
         occurred_at: datetime,
         kind: EntryKind,
         title: Annotated[str, Field(min_length=1, max_length=300)],
-        components: Annotated[list[ComponentInput], Field(min_length=1, max_length=100)],
+        components: Annotated[list[MealComponentInput], Field(min_length=1, max_length=100)],
         ctx: MCPContext,  # type: ignore[type-arg]
         timezone: str = default_timezone,
         notes: Annotated[str | None, Field(max_length=5_000)] = None,
@@ -508,4 +511,5 @@ def create_server(
             except Exception as error:
                 raise _translate_error(error) from error
 
+    register_inventory_tools(server, repository, default_timezone)
     return server
