@@ -73,3 +73,35 @@ def meal_payload() -> dict[str, Any]:
 @pytest.fixture
 def meal(meal_payload: dict[str, Any]) -> LogEntryInput:
     return LogEntryInput.model_validate(meal_payload)
+
+
+@pytest.fixture
+def usda_database(tmp_path, monkeypatch):
+    """Install independently versioned bulk fixtures through the real importer."""
+    import hashlib
+    import json
+    import zipfile
+
+    from mcp_nutrition_db.usda_dataset import build_database
+
+    sequence = 0
+
+    def install(records, release="test-release"):
+        nonlocal sequence
+        sequence += 1
+        archive = tmp_path / f"usda-{sequence}.zip"
+        with zipfile.ZipFile(archive, "w") as zipped:
+            zipped.writestr("foods.json", json.dumps({"Foods": records}))
+        database = tmp_path / f"usda-{sequence}.sqlite3"
+        source = {
+            "path": str(archive),
+            "release": release,
+            "data_type": next(r["dataType"] for r in records if r is not None),
+            "url": "https://example.invalid/usda.zip",
+            "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        }
+        build_database(database, [source])
+        monkeypatch.setenv("MCP_NUTRITION_USDA_DATABASE", str(database))
+        return database
+
+    return install

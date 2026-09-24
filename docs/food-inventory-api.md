@@ -392,22 +392,27 @@ USDA tools:
 | `nutrition_search_usda_foods` | `query`, optional `data_types`, `page=1`, `limit=20` (1–50) | Candidates with FDC ID, description, data type, brand and preparation information where available |
 | `nutrition_get_usda_food` | `fdc_id` | Retrieved source snapshot, normalized supported nutrients and basis, portions, original nutrient IDs/units, retrieval time, `source_snapshot_id` |
 
-These are read-only, open-world tools. The server reads a configured USDA API
-credential, caches successful responses, applies timeouts/bounded retries, and
-returns clear unavailable/rate-limit errors. Ordinary local inventory and
-logging continue working without a key or network access. Send food search
-terms or IDs, not meal history or personal notes, to the provider.
+These are read-only, closed-world tools backed exclusively by the installed
+SQLite reference database. No runtime API requests or credentials exist. The
+Nix build pins official bulk archives by checksum; initial coverage is
+Foundation, SR Legacy, and FNDDS, excluding Branded foods. Responses identify
+the dataset, releases, and coverage. A request for only uninstalled data types
+returns `dataset_type_unavailable`; a missing FDC ID returns
+`dataset_food_not_found`. Neither triggers a network fallback.
 
-Search responses also return a persisted `lookup_id`, query, and timestamp,
-including searches with zero results. Provider failures return a lookup receipt
-with an unavailable outcome where possible. Successful retrieved snapshots can
-be reused without requiring a fresh network call for every create.
+Search responses return persisted `lookup_id`, query, timestamp, dataset
+metadata, and result counts, including zero-result searches. Database failures
+return a persisted unavailable receipt. Successful searches are cached by
+query, pagination, filters, and dataset identity. Detail snapshots are copied
+into the personal database and keyed by their content and dataset; they do not
+expire. Previous API snapshots remain valid historical evidence but are never
+substituted for current local-dataset search/detail results.
 
 For estimated composition, `usda_lookup` contains `outcome` (`no_suitable_match`
 or `unavailable`), non-empty `fallback_reason`, and `lookup_ids`. For
 `no_suitable_match`, require at least one stored search receipt and explain why
 any plausible candidates were rejected. For `unavailable`, require a failure
-receipt or a server-verifiable configuration/unavailability condition. Never
+receipt from an actual failed local lookup. Never
 describe a failed lookup as a search with no results. The server validates the
 evidence references; suitability remains an explicit chat-model judgment.
 
@@ -461,12 +466,12 @@ from per-100-g data, retain missing values, and select one documented energy
 field without summing alternative energy measures. Adapter implementation
 requires fixtures for the supported FDC data types before enabling imports.
 
-USDA provides food search and detail endpoints and requires a data.gov API key;
-its data is public domain. See the official
-[FoodData Central API guide](https://fdc.nal.usda.gov/api-guide/).
-The adapter is implemented with cached searches and immutable source snapshots.
-The NixOS module can use the public DEMO_KEY until a private key is configured;
-rate limits are reported explicitly rather than treated as missing foods.
+USDA publishes public-domain [bulk CSV/JSON datasets](https://fdc.nal.usda.gov/download-datasets/).
+The offline importer preserves raw records, source archive URL/SHA-256 and
+release, record SHA-256, and normalization version. Missing nutrients remain
+unknown; negative source nutrients become unknown with an explicit note and
+the raw value retained. Foods without nutrient values cannot be imported into
+the inventory. See [offline USDA data](usda-reference.md) for the update policy.
 
 ## 7. Persistence, errors, and acceptance criteria
 
@@ -486,7 +491,8 @@ Expected domain errors have stable codes and actionable details:
 `food_not_found`, `food_revision_not_found`, `food_archived`,
 `food_identity_conflict`, `revision_conflict`, `invalid_serving`,
 `amount_required`, `incompatible_basis`, `invalid_link_target`, `plan_expired`,
-`plan_conflict`, `provider_unavailable`, and `provider_rate_limited`.
+`plan_conflict`, `provider_unavailable`, `dataset_type_unavailable`, and
+`dataset_food_not_found`.
 Expose them consistently through MCP tool-error responses; no partial writes.
 Normal validation retains field locations. Error details must omit credentials.
 

@@ -360,3 +360,19 @@ match the baseline exactly. USDA returned verified profiles before HTTP
 429; other imported profiles retain historical evidence, with explicit
 unavailability receipts where applicable. Private mappings, exceptions, tool
 results, and verification artifacts are kept outside the source repository.
+
+## Offline USDA reference database (2026-09-24)
+
+- [x] Build checksum-pinned Foundation, SR Legacy, and FNDDS bulk archives into
+  a separate read-only SQLite database with deterministic full-text search.
+- [x] Replace USDA API calls with local-only lookup; remove API keys and network
+  fallback, expose dataset coverage, and retain failed-lookup receipts.
+- [x] Copy selected records, release/checksum provenance, and normalized values
+  into immutable personal evidence; require explicit inventory revisions to
+  adopt changes. Preserve historical API snapshots and all past meals.
+- [x] Verify changed/removed records, missing/corrupt databases, unknown and
+  negative source nutrients, duplicate IDs/checksums, and no-network behavior.
+- [x] Pass Ruff, mypy, and x86_64-linux Nix package/module checks; all 86 tests
+  pass in the Nix build, including the stdio MCP integration test.
+- [ ] Deploy the pinned local database and verify production MCP lookups and
+  unchanged inventory/history.

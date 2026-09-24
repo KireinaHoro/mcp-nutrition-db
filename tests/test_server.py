@@ -44,6 +44,8 @@ def test_server_advertises_inventory_tools_with_safe_annotations(
         "nutrition_search_usda_foods",
         "nutrition_get_usda_food",
     }
+    assert tools["nutrition_search_usda_foods"].annotations.openWorldHint is False
+    assert tools["nutrition_get_usda_food"].annotations.openWorldHint is False
     assert tools["nutrition_get_entry"].annotations.readOnlyHint is True
     assert tools["nutrition_list_entries"].annotations.readOnlyHint is True
     assert tools["nutrition_delete_entry"].annotations.destructiveHint is True

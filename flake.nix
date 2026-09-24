@@ -6,6 +6,8 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      usdaDatabaseFor = system:
+        nixpkgs.legacyPackages.${system}.callPackage ./nix/usda-database.nix { src = self; };
       packageFor = system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
@@ -23,6 +25,9 @@
           nativeCheckInputs = with python.pkgs; [ pytestCheckHook ];
           pytestFlags = [ "tests" ];
           pythonImportsCheck = [ "mcp_nutrition_db" ];
+          makeWrapperArgs = [
+            "--set-default MCP_NUTRITION_USDA_DATABASE ${usdaDatabaseFor system}/share/mcp-nutrition-db/usda.sqlite3"
+          ];
 
           meta = {
             description = "Private MCP service for a conversational nutrition log";
@@ -35,6 +40,7 @@
     {
       packages = forAllSystems (system: {
         default = packageFor system;
+        usda-database = usdaDatabaseFor system;
       });
 
       apps = forAllSystems (system: {

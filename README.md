@@ -39,12 +39,16 @@ before creating a food; normalized short names, USDA IDs, and product identifier
 are unique even for archived foods. Historical links preserve existing nutrition
 snapshots instead of recalculating old meals.
 
-USDA retrieval uses `MCP_NUTRITION_USDA_API_KEY_FILE` or
-`MCP_NUTRITION_USDA_API_KEY`. The NixOS module defaults to the public, rate-limited
-`DEMO_KEY`; configure `services.mcp-nutrition-db.usdaApiKeyFile` for a private
-data.gov key, or disable demo access with `usdaUseDemoKey = false`. Keys are never
-tool arguments. Lookup failures return explicit fallback receipts; existing
-inventory and history remain usable offline.
+USDA lookups use a read-only local database built from checksum-pinned official
+Foundation, SR Legacy, and FNDDS bulk releases. There are no runtime USDA API
+calls, keys, or network fallback. Nix packages include the database; other
+installations set `MCP_NUTRITION_USDA_DATABASE` to its path. The NixOS override is
+`services.mcp-nutrition-db.usdaDatabase`.
+
+Selected USDA records are copied into immutable evidence snapshots in the
+personal database. Dataset updates change available search results, never
+existing food revisions or meals. See [offline USDA data](docs/usda-reference.md)
+for coverage, provenance, and the explicit update process.
 
 ## Development
 

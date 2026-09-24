@@ -333,15 +333,8 @@ def test_usda_nutrient_mapping(data_type):
         normalize_food(raw)
 
 
-def test_usda_receipts_direct_import_unique_id_and_snapshot(repository, monkeypatch):
-    def request(path, params):
-        return (
-            {"foods": [{"fdcId": 123, "description": "Test USDA food"}], "totalPages": 1}
-            if path == "foods/search"
-            else usda_raw()
-        )
-
-    monkeypatch.setattr(USDAClient, "_request", staticmethod(request))
+def test_usda_receipts_direct_import_unique_id_and_snapshot(repository, usda_database):
+    usda_database([usda_raw()])
     client = USDAClient(repository)
     search = client.search("test")
     assert client.search("test")["lookup_id"] == search["lookup_id"]
@@ -372,7 +365,7 @@ def test_usda_receipts_direct_import_unique_id_and_snapshot(repository, monkeypa
 
 
 def test_estimates_require_real_fallback_evidence(repository, monkeypatch):
-    monkeypatch.setenv("MCP_NUTRITION_USDA_API_KEY", "fake")
+    monkeypatch.delenv("MCP_NUTRITION_USDA_DATABASE", raising=False)
     payload = food_payload(
         source={"type": "estimated", "detail": "Recipe estimate", "method": "model_estimate"},
         estimation={"confidence": "low", "assumptions": ["Recipe is unknown"], "source": "model"},
@@ -383,10 +376,6 @@ def test_estimates_require_real_fallback_evidence(repository, monkeypatch):
     with pytest.raises(ValueError, match="receipts"):
         repository.inventory.create_food(FoodDefinition.model_validate(payload))
 
-    def unavailable(path, params):
-        raise InventoryError("provider_rate_limited")
-
-    monkeypatch.setattr(USDAClient, "_request", staticmethod(unavailable))
     receipt = USDAClient(repository).search("bakery")
     assert receipt["outcome"] == "unavailable"
     payload["usda_lookup"].update(outcome="unavailable", lookup_ids=[receipt["lookup_id"]])
@@ -495,8 +484,8 @@ def test_inventory_mcp_create_log_conflict_and_link(repository, meal):
     asyncio.run(exercise())
 
 
-def test_direct_usda_cannot_be_hidden_in_mixed_source(repository, monkeypatch):
-    monkeypatch.setattr(USDAClient, "_request", staticmethod(lambda path, params: usda_raw()))
+def test_direct_usda_cannot_be_hidden_in_mixed_source(repository, usda_database):
+    usda_database([usda_raw()])
     snapshot = USDAClient(repository).get_food(123)
     source = {
         "type": "database",
@@ -520,10 +509,9 @@ def test_direct_usda_cannot_be_hidden_in_mixed_source(repository, monkeypatch):
         )
 
 
-def test_two_proxy_estimates_reference_one_usda_identity(repository, monkeypatch):
-    monkeypatch.setattr(USDAClient, "_request", staticmethod(lambda path, params: usda_raw()))
-    monkeypatch.delenv("MCP_NUTRITION_USDA_API_KEY", raising=False)
-    monkeypatch.delenv("MCP_NUTRITION_USDA_API_KEY_FILE", raising=False)
+def test_two_proxy_estimates_reference_one_usda_identity(repository, usda_database):
+    usda_database([usda_raw()])
+    receipt = USDAClient(repository).search("bakery")
     snapshot = USDAClient(repository).get_food(123)
     canonical = make_food(
         repository,
@@ -553,7 +541,11 @@ def test_two_proxy_estimates_reference_one_usda_identity(repository, monkeypatch
                 "source": "USDA proxy",
                 "assumptions": ["Unknown recipe"],
             },
-            usda_lookup={"outcome": "unavailable", "fallback_reason": "Provider not configured"},
+            usda_lookup={
+                "outcome": "no_suitable_match",
+                "fallback_reason": "No bakery match in local dataset",
+                "lookup_ids": [receipt["lookup_id"]],
+            },
         )
         assert food["usda_fdc_id"] is None
         assert food["source_evidence"]["0"]["usda_fdc_id"] == 123

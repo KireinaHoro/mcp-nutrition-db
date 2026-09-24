@@ -1,15 +1,21 @@
-"""Bounded USDA FoodData Central retrieval with immutable provenance receipts."""
+"""Offline USDA search and immutable copies from the installed reference database.
+
+No network client or API-key configuration exists in this module. Historical
+API snapshots remain valid evidence but are never used as current search data.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
-from datetime import timedelta
+import re
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 from .inventory import InventoryError, _json
 from .models import NutritionValues
@@ -31,16 +37,6 @@ NUTRIENT_IDS = {
 }
 
 
-def api_key() -> str | None:
-    key_file = os.environ.get("MCP_NUTRITION_USDA_API_KEY_FILE")
-    if key_file:
-        try:
-            return Path(key_file).read_text().strip() or None
-        except OSError:
-            return None
-    return os.environ.get("MCP_NUTRITION_USDA_API_KEY") or None
-
-
 def normalize_food(raw: dict[str, Any]) -> dict[str, Any]:
     """FDC full foodNutrients are per 100 g; labelNutrients are NOT interchangeable."""
     if raw.get("dataType") not in DATA_TYPES:
@@ -55,6 +51,7 @@ def normalize_food(raw: dict[str, Any]) -> dict[str, Any]:
             )
     values: dict[str, Any] = {}
     selected = {}
+    normalization_notes = []
     for name, candidates in NUTRIENT_IDS.items():
         values[name] = None
         for nutrient_id, unit in candidates:
@@ -62,17 +59,29 @@ def normalize_food(raw: dict[str, Any]) -> dict[str, Any]:
                 amount, actual_unit = nutrients[nutrient_id]
                 if actual_unit != unit:
                     raise ValueError("unexpected USDA nutrient unit")
+                if isinstance(amount, (int, float)) and amount < 0:
+                    normalization_notes.append(
+                        {
+                            "field": name,
+                            "nutrient_id": nutrient_id,
+                            "issue": "negative_source_value_preserved_as_unknown",
+                            "value": amount,
+                        }
+                    )
+                    break
                 values[name] = amount
                 selected[name] = nutrient_id
                 break
-    nutrition = NutritionValues.model_validate(values)
+    nutrition = NutritionValues.model_validate(values).model_dump() if selected else values
     return {
         "fdc_id": int(raw["fdcId"]),
         "description": raw["description"],
         "data_type": raw["dataType"],
         "basis": {"quantity": 100, "unit": "g"},
-        "nutrition": nutrition.model_dump(),
+        "nutrition": nutrition,
+        "nutrition_available": bool(selected),
         "selected_nutrient_ids": selected,
+        "normalization_notes": normalization_notes,
         "portions": raw.get("foodPortions", []),
         "brand": raw.get("brandOwner"),
         "source_url": f"https://fdc.nal.usda.gov/food-details/{int(raw['fdcId'])}/nutrients",
@@ -84,132 +93,156 @@ class USDAClient:
     def __init__(self, repository: NutritionRepository) -> None:
         self.repo = repository
 
-    @staticmethod
-    def _request(path: str, params: dict[str, Any]) -> dict[str, Any]:
-        key = api_key()
-        if not key:
-            raise InventoryError("provider_unavailable", reason="USDA API key is not configured")
-        url = (
-            "https://api.nal.usda.gov/fdc/v1/"
-            + path
-            + "?"
-            + urlencode({**params, "api_key": key}, doseq=True)
-        )
-        request = Request(url, headers={"Accept": "application/json"})
-        # One retry only for transient upstream 5xx responses; never echo URL/key.
-        for attempt in range(2):
-            try:
-                with urlopen(request, timeout=10) as response:
-                    data = response.read(5_000_001)
-                if len(data) > 5_000_000:
-                    raise InventoryError("provider_unavailable", reason="USDA response too large")
-                result = json.loads(data)
-                if not isinstance(result, dict):
-                    raise ValueError("invalid response")
-                return result
-            except HTTPError as error:
-                if 500 <= error.code < 600 and attempt == 0:
-                    continue
-                raise InventoryError(
-                    "provider_rate_limited" if error.code == 429 else "provider_unavailable",
-                    status=error.code,
-                ) from None
-            except (URLError, TimeoutError, OSError, ValueError):
-                raise InventoryError(
-                    "provider_unavailable", reason="USDA retrieval failed"
-                ) from None
-        raise InventoryError("provider_unavailable")
+    @contextmanager
+    def _database(self) -> Iterator[tuple[sqlite3.Connection, dict[str, Any]]]:
+        path = os.environ.get("MCP_NUTRITION_USDA_DATABASE")
+        if not path:
+            raise InventoryError(
+                "provider_unavailable", reason="local USDA database not configured"
+            )
+        connection = None
+        try:
+            connection = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+            connection.row_factory = sqlite3.Row
+            row = connection.execute("SELECT value FROM metadata WHERE key='dataset'").fetchone()
+            if row is None:
+                raise ValueError("missing dataset metadata")
+            metadata = json.loads(row["value"])
+            if metadata["format_version"] != 1 or not metadata["food_counts"]:
+                raise ValueError("unsupported dataset")
+            yield connection, metadata
+        except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+            raise InventoryError(
+                "provider_unavailable", reason="local USDA database unavailable or invalid"
+            ) from None
+        finally:
+            if connection is not None:
+                connection.close()
 
     def search(
         self, query: str, data_types: list[str] | None = None, page: int = 1, limit: int = 20
     ) -> dict[str, Any]:
+        if not query.strip() or len(query) > 300 or not 1 <= page <= 1000 or not 1 <= limit <= 50:
+            raise ValueError("invalid USDA search bounds")
         if data_types and any(t not in DATA_TYPES for t in data_types):
             raise ValueError("unsupported USDA data type")
-        params: dict[str, Any] = {"query": query, "pageNumber": page, "pageSize": limit}
-        if data_types:
-            params["dataType"] = sorted(set(data_types))
-        request_json = _json(params)
-        cutoff = _timestamp(self.repo.clock() - timedelta(days=1))
-        with self.repo._connect() as connection:
-            rows = connection.execute(
-                "SELECT result_json FROM usda_lookups WHERE request_json=? AND "
-                "created_at>=? ORDER BY created_at DESC",
-                (request_json, cutoff),
-            ).fetchall()
-        for row in rows:
-            cached: dict[str, Any] = json.loads(row["result_json"])
-            if cached["outcome"] == "success":
-                return {**cached, "cached": True}
-        lookup_id = _new_id()
+        params: dict[str, Any] = {
+            "query": query,
+            "page": page,
+            "limit": limit,
+            "data_types": sorted(set(data_types or [])),
+            "provider": "local_database",
+        }
         now = _timestamp(self.repo.clock())
         result: dict[str, Any] = {
-            "lookup_id": lookup_id,
+            "lookup_id": _new_id(),
             "query": query,
             "retrieved_at": now,
             "cached": False,
+            "provider": "local_database",
         }
         try:
-            raw = self._request("foods/search", params)
-            result.update(
-                {
-                    "outcome": "success",
-                    "page": page,
-                    "total_pages": raw.get("totalPages", 0),
-                    "foods": [
+            with self._database() as (database, metadata):
+                params["dataset_id"] = metadata["dataset_id"]
+                result["dataset"] = metadata
+                available = set(metadata["food_counts"])
+                types = sorted(set(data_types or available) & available)
+                missing = sorted(set(data_types or []) - available)
+                result["searched_data_types"] = types
+                result["unavailable_data_types"] = missing
+                if not types:
+                    raise InventoryError(
+                        "dataset_type_unavailable", reason="requested data types are not installed"
+                    )
+                with self.repo._connect() as connection:
+                    row = connection.execute(
+                        "SELECT result_json FROM usda_lookups WHERE request_json=? "
+                        "ORDER BY created_at DESC LIMIT 1",
+                        (_json(params),),
+                    ).fetchone()
+                if row:
+                    cached: dict[str, Any] = json.loads(row["result_json"])
+                    if cached["outcome"] == "success":
+                        return {**cached, "cached": True}
+                args: list[Any]
+                tokens = re.findall(r"[^\W_]+", query, flags=re.UNICODE)
+                if query.strip().isascii() and query.strip().isdecimal():
+                    food_id = int(query.strip())
+                    # Bound SQLite integers even when a query is hundreds of digits.
+                    food_id = food_id if 0 < food_id < 2**63 else 0
+                    table, condition, args, order = "foods f", "f.fdc_id=?", [food_id], "f.fdc_id"
+                else:
+                    table = "food_search JOIN foods f ON f.fdc_id=food_search.rowid"
+                    condition = "food_search MATCH ?"
+                    args = [" AND ".join('"' + token + '"' for token in tokens) or '""']
+                    order = "food_search.rank, f.fdc_id"
+                condition += " AND f.data_type IN (" + ",".join("?" for _ in types) + ")"
+                arguments = [*args, *types]
+                count = database.execute(
+                    f"SELECT count(*) FROM {table} WHERE {condition}", arguments
+                ).fetchone()[0]
+                rows = database.execute(
+                    f"SELECT f.* FROM {table} WHERE {condition} ORDER BY {order} LIMIT ? OFFSET ?",
+                    [*arguments, limit, (page - 1) * limit],
+                ).fetchall()
+                foods = []
+                for row in rows:
+                    snapshot = json.loads(row["snapshot_json"])
+                    foods.append(
                         {
-                            k: f.get(k)
-                            for k in (
-                                "fdcId",
-                                "description",
-                                "dataType",
-                                "brandOwner",
-                                "brandName",
-                                "ingredients",
-                            )
+                            "fdcId": row["fdc_id"],
+                            "description": row["description"],
+                            "dataType": row["data_type"],
+                            "brandOwner": snapshot["brand"],
+                            "brandName": snapshot["raw"].get("brandName"),
+                            "ingredients": snapshot["raw"].get("ingredients"),
+                            "nutrition_available": snapshot["nutrition_available"],
                         }
-                        for f in raw.get("foods", [])
-                    ],
-                }
-            )
+                    )
+                result.update(
+                    outcome="success",
+                    page=page,
+                    total_pages=math.ceil(count / limit),
+                    total_results=count,
+                    foods=foods,
+                )
         except InventoryError as error:
             result.update(
-                {
-                    "outcome": "unavailable",
-                    "error": {"code": error.code, **error.details},
-                    "foods": [],
-                }
+                outcome="unavailable", error={"code": error.code, **error.details}, foods=[]
             )
         with self.repo._connect() as connection:
             connection.execute(
                 "INSERT INTO usda_lookups VALUES (?, ?, ?, ?)",
-                (lookup_id, request_json, _json(result), now),
+                (result["lookup_id"], _json(params), _json(result), now),
             )
         return result
 
     def get_food(self, fdc_id: int) -> dict[str, Any]:
-        cutoff = _timestamp(self.repo.clock() - timedelta(days=1))
-        with self.repo._connect() as connection:
-            row = connection.execute(
-                "SELECT snapshot_json FROM usda_snapshots WHERE fdc_id=? AND "
-                "created_at>=? ORDER BY created_at DESC LIMIT 1",
-                (fdc_id, cutoff),
+        if not 0 < fdc_id < 2**63:
+            raise ValueError("invalid FDC ID")
+        with self._database() as (database, metadata):
+            row = database.execute(
+                "SELECT snapshot_json FROM foods WHERE fdc_id=?", (fdc_id,)
             ).fetchone()
-        if row:
-            cached: dict[str, Any] = json.loads(row["snapshot_json"])
-            return {**cached, "cached": True}
-        raw = self._request(f"food/{fdc_id}", {"format": "full"})
-        try:
-            snapshot = normalize_food(raw)
-            if snapshot["fdc_id"] != fdc_id:
-                raise ValueError("mismatched FDC ID")
-        except (ValueError, KeyError, TypeError):
-            raise InventoryError(
-                "provider_unavailable", reason="unsupported or invalid USDA food response"
-            ) from None
-        snapshot_id = _new_id()
+            if row is None:
+                raise InventoryError(
+                    "dataset_food_not_found", fdc_id=fdc_id, dataset_id=metadata["dataset_id"]
+                )
+            snapshot = json.loads(row["snapshot_json"])
+        # Content identity includes release and normalization. Old API snapshots
+        # and previous dataset releases are never mistaken for the active version.
+        snapshot_id = "usda-local-" + hashlib.sha256(_json(snapshot).encode()).hexdigest()
         now = _timestamp(self.repo.clock())
-        snapshot.update({"source_snapshot_id": snapshot_id, "retrieved_at": now})
+        snapshot.update(source_snapshot_id=snapshot_id, retrieved_at=now, provider="local_database")
         with self.repo._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT snapshot_json FROM usda_snapshots WHERE source_snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+            if row:
+                cached: dict[str, Any] = json.loads(row["snapshot_json"])
+                return {**cached, "cached": True}
             connection.execute(
                 "INSERT INTO usda_snapshots VALUES (?, ?, ?, ?)",
                 (snapshot_id, fdc_id, _json(snapshot), now),

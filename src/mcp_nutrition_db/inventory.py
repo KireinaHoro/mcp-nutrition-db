@@ -232,12 +232,10 @@ class InventoryRepository:
                 if row is None:
                     raise ValueError("unknown USDA lookup receipt")
                 receipts.append(json.loads(row["result_json"]))
-            from .usda import api_key
-
             if lookup.outcome == "no_suitable_match":
                 if not receipts or any(r["outcome"] != "success" for r in receipts):
                     raise ValueError("no_suitable_match requires successful USDA search receipts")
-            elif not any(r["outcome"] == "unavailable" for r in receipts) and api_key() is not None:
+            elif not any(r["outcome"] == "unavailable" for r in receipts):
                 raise ValueError("unavailable fallback requires failure receipt")
         return evidence
 

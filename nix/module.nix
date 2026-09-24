@@ -73,16 +73,10 @@ in
       description = "Minimum level for redacted structured application logs.";
     };
 
-    usdaApiKeyFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "Runtime path to a USDA data.gov API key, loaded as a systemd credential.";
-    };
-
-    usdaUseDemoKey = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "Use USDA's public, rate-limited DEMO_KEY when no private key is configured.";
+    usdaDatabase = lib.mkOption {
+      type = lib.types.path;
+      default = "${self.packages.${pkgs.stdenv.hostPlatform.system}.usda-database}/share/mcp-nutrition-db/usda.sqlite3";
+      description = "Read-only USDA reference database. All USDA lookups are offline; updates require a new pinned dataset.";
     };
 
     stateDirectory = lib.mkOption {
@@ -133,17 +127,11 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
 
-      environment = if cfg.usdaApiKeyFile != null then {
-        MCP_NUTRITION_USDA_API_KEY_FILE = "%d/usda-api-key";
-      } else lib.optionalAttrs cfg.usdaUseDemoKey {
-        MCP_NUTRITION_USDA_API_KEY = "DEMO_KEY";
-      };
+      environment.MCP_NUTRITION_USDA_DATABASE = toString cfg.usdaDatabase;
 
       serviceConfig = {
         Type = "simple";
         DynamicUser = true;
-        LoadCredential = lib.optional (cfg.usdaApiKeyFile != null)
-          "usda-api-key:${cfg.usdaApiKeyFile}";
         StateDirectory = cfg.stateDirectory;
         StateDirectoryMode = "0700";
         ExecStart = lib.escapeShellArgs [

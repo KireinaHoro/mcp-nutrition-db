@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from .inventory_models import FoodDefinition, FoodLink
@@ -22,11 +21,16 @@ identities across portions, packs, dates, spellings, and aliases. Inspect prepar
 Use a concise stable short_name such as 'coop surimi'. Duplicate normalized short names, USDA
 IDs, and product identifiers are rejected deterministically; fetch/reuse the returned food_id.
 Do not evade a conflict by inventing a new short name. Add aliases/servings to existing foods.
-For new foods needing composition, search USDA then retrieve a suitable record before estimating.
+For new foods needing composition, search the local USDA database then retrieve a suitable record
+before estimating. USDA tools are offline only, never network queries. Responses identify the
+installed dataset release and coverage; absence is not proof USDA has no such food.
 Direct USDA foods require their unique usda_fdc_id and retrieved source snapshot. Exact product
 labels remain valid evidence. Only estimate when suitable USDA data is unavailable; record the
 lookup receipt/reason, method, confidence, assumptions, and source. A proxy is an estimate and
 references the canonical USDA inventory food. Missing nutrients remain unknown.
+Retrieved source records and inventory nutrition are immutable copies, not live references.
+Dataset upgrades do not update inventory or meals. Adopt changed USDA data only with an explicit
+revision-checked inventory update; old food revisions and meal snapshots remain unchanged.
 Pin food_revision and supply amount; the server scales nutrition. Never assume the weight of a
 variable pack or mix raw/cooked, bone-in/edible, or drained/as-sold weights. An estimated portion
 can use known inventory composition. Only use inline nutrition for truly idiosyncratic or
@@ -246,16 +250,12 @@ def register_inventory_tools(
             "nutrition_apply_food_links", ctx, inventory.apply_food_links, plan_id, reason
         )
 
-    external = ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
-    )
-
     @server.tool(
-        annotations=external,
+        annotations=READ_ONLY,
         description=(
-            "Search USDA before estimating a new food. Returns candidates and a "
-            "lookup receipt, including explicit unavailable outcomes; sends only "
-            "food query terms to USDA."
+            "Search the installed local USDA database before estimating a new food. "
+            "Returns dataset release/coverage, candidates, and a lookup receipt. "
+            "Offline only: no USDA API or network fallback."
         ),
     )
     def nutrition_search_usda_foods(
@@ -271,11 +271,12 @@ def register_inventory_tools(
         )
 
     @server.tool(
-        annotations=external,
+        annotations=READ_ONLY,
         description=(
-            "Retrieve a USDA food with normalized per-100-g nutrients, original "
-            "evidence, and immutable source_snapshot_id. Use its FDC ID once in the"
-            " catalog; proxies reference that food."
+            "Copy a food from the installed local USDA database into an immutable "
+            "source snapshot with per-100-g nutrients, raw evidence, release and hashes. "
+            "Offline only. Dataset updates never change inventory or past meals. "
+            "Use its FDC ID once in the catalog; proxies reference that food."
         ),
     )
     def nutrition_get_usda_food(
