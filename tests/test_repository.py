@@ -81,7 +81,7 @@ def test_v1_goal_migrates_calorie_target_to_base_burn(tmp_path: Path) -> None:
     assert goal["base_burn_kcal"] == 2_000
     assert goal["targets"]["calories_kcal"] is None
     assert goal["energy_budget"]["ordinary_target_kcal"] == 2_000
-    assert goal["energy_budget"]["policy_id"] == "energy-credit/v5"
+    assert goal["energy_budget"]["policy_id"] == "energy-credit/v6"
 
 
 def test_v2_training_migrates_with_conservative_provenance(tmp_path: Path) -> None:
@@ -377,7 +377,7 @@ def test_confidence_adjustment_and_recovery_weights(repository: NutritionReposit
     )
 
     balance = repository.energy_balance(date(2026, 8, 27))
-    assert balance["policy_id"] == "energy-credit/v5"
+    assert balance["policy_id"] == "energy-credit/v6"
     assert balance["reported_training_burn_kcal"] == 1_200
     assert balance["credited_training_burn_kcal"] == 960
     assert balance["unused_exercise_credit_kcal"] == 960
@@ -517,7 +517,7 @@ def test_every_positive_unused_credit_is_distributed(repository: NutritionReposi
     assert [item["scheduled_kcal"] for item in schedule] == [0.5, 0.3, 0.2]
 
 
-def test_incoming_recovery_precedes_exercise_and_collisions_share_cap(
+def test_incoming_recovery_precedes_exercise_and_prior_reservations_survive(
     repository: NutritionRepository,
 ) -> None:
     repository.set_goals(
@@ -551,11 +551,11 @@ def test_incoming_recovery_precedes_exercise_and_collisions_share_cap(
     first_day = repository.energy_balance(date(2026, 8, 27))
     day_three = first_day["recovery_schedule"][1]
     assert day_three["candidate_kcal"] == 300
-    assert day_three["scheduled_kcal"] == 187.5
+    assert day_three["scheduled_kcal"] == 300
     assert repository.energy_balance(date(2026, 8, 29))["incoming_recovery_kcal"] == 500
 
 
-def test_large_day_tapers_after_prior_training_collisions(
+def test_large_day_reserves_remaining_capacity_after_prior_training(
     repository: NutritionRepository,
 ) -> None:
     repository.set_goals(
@@ -589,14 +589,14 @@ def test_large_day_tapers_after_prior_training_collisions(
 
     large_day = repository.energy_balance(date(2026, 8, 30))
     assert large_day["unused_exercise_credit_kcal"] == 2_794.813
-    assert large_day["recovery_pool_kcal"] == 1_000
+    assert large_day["recovery_pool_kcal"] == 924.017
     assert [item["candidate_kcal"] for item in large_day["recovery_schedule"]] == [
-        500,
+        424.017,
         300,
         200,
     ]
     assert [item["scheduled_kcal"] for item in large_day["recovery_schedule"]] == [
-        434.041,
+        424.017,
         300,
         200,
     ]

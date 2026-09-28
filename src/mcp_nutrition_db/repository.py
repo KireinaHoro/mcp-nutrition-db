@@ -1383,8 +1383,9 @@ class NutritionRepository:
             "recovery_pool_cap": "next_day_planned_deficit / first_recovery_weight",
             "recovery_pool_overflow": "repay_eligible_debit_then_expire",
             "daily_cap": "destination_planned_deficit",
-            "collision_handling": "proportional",
-            "overflow": "expire",
+            "collision_handling": "earlier_source_reservations_first",
+            "reservation": "clip_candidates_to_remaining_destination_capacity_before_repayment",
+            "overflow": "repay_eligible_source_debit_then_expire",
             "missed_allocation": "repay_opening_debit_on_settlement_then_expire",
             "ordinary_target_formula": "base_burn - deficit",
             "planned_baseline_formula": "ordinary_target + incoming_recovery - debit_adjustment",
@@ -1445,27 +1446,15 @@ class NutritionRepository:
         }
 
     @staticmethod
-    def _proportional_cap(
-        candidates: list[tuple[date, int, int]], cap_mkcal: int
-    ) -> list[tuple[date, int, int, int]]:
-        total = sum(candidate for _source, _offset, candidate in candidates)
-        if total <= cap_mkcal:
-            return [(*candidate, candidate[2]) for candidate in candidates]
-        if total == 0 or cap_mkcal == 0:
-            return [(*candidate, 0) for candidate in candidates]
-
-        allocated: list[list[Any]] = []
-        for source, offset, candidate in candidates:
-            quotient, remainder = divmod(candidate * cap_mkcal, total)
-            allocated.append([source, offset, candidate, quotient, remainder])
-        remainder_units = cap_mkcal - sum(item[3] for item in allocated)
-        allocation_order = sorted(
-            range(len(allocated)),
-            key=lambda index: (-allocated[index][4], allocated[index][0], allocated[index][1]),
-        )
-        for index in allocation_order[:remainder_units]:
-            allocated[index][3] += 1
-        return [(item[0], item[1], item[2], item[3]) for item in allocated]
+    def _recovery_reservations(pool_mkcal: int, capacity_mkcal: list[int]) -> list[int]:
+        """Fit each tapered candidate into capacity left by earlier source days."""
+        first = (pool_mkcal * RECOVERY_WEIGHTS_PERMILLE[0] + 500) // 1_000
+        second = (pool_mkcal * RECOVERY_WEIGHTS_PERMILLE[1] + 500) // 1_000
+        candidates = (first, second, pool_mkcal - first - second)
+        return [
+            min(amount, capacity)
+            for amount, capacity in zip(candidates, capacity_mkcal, strict=True)
+        ]
 
     def _energy_balances(
         self, start_date: date, end_date: date, timezone: str
@@ -1573,7 +1562,7 @@ class NutritionRepository:
                             }
                         )
                 candidates = kept_candidates
-            allocated = self._proportional_cap(candidates, deficit_mkcal)
+            allocated = [(*candidate, candidate[2]) for candidate in candidates]
             incoming_mkcal = sum(item[3] for item in allocated)
             for source_date, offset, candidate_mkcal, scheduled_mkcal in allocated:
                 source_schedule = internal[source_date]["recovery_schedule"]
@@ -1634,6 +1623,16 @@ class NutritionRepository:
             incoming_used_mkcal: int | None = None
             recovery_pool_cap_mkcal: int | None = None
             recovery_pool_mkcal: int | None = None
+            recovery_amounts = [0, 0, 0]
+            recovery_capacity = []
+            for offset in range(1, 4):
+                destination = current_date + timedelta(days=offset)
+                destination_goal = active_goals_by_date.get(destination)
+                destination_cap = (
+                    0 if destination_goal is None else int(destination_goal["deficit_mkcal"])
+                )
+                committed = sum(amount for _, _, amount in pending.get(destination, []))
+                recovery_capacity.append(max(0, destination_cap - committed))
             if goal is None:
                 status = "no_goal"
             elif not intake_complete:
@@ -1648,10 +1647,14 @@ class NutritionRepository:
                 next_goal = active_goals_by_date.get(current_date + timedelta(days=1))
                 next_deficit_mkcal = 0 if next_goal is None else int(next_goal["deficit_mkcal"])
                 recovery_pool_cap_mkcal = next_deficit_mkcal * 1_000 // RECOVERY_WEIGHTS_PERMILLE[0]
-                recovery_pool_mkcal = min(unused_exercise_mkcal, recovery_pool_cap_mkcal)
+                recovery_amounts = self._recovery_reservations(
+                    min(unused_exercise_mkcal, recovery_pool_cap_mkcal), recovery_capacity
+                )
+                recovery_pool_mkcal = sum(recovery_amounts)
                 # Ordinary carryover yields to outstanding debit. Exceptional recovery is protected.
                 if debit_active and opening_debit_mkcal > 0 and not exceptional:
                     recovery_pool_mkcal = 0
+                    recovery_amounts = [0, 0, 0]
 
             debit_added_mkcal = 0
             debit_repaid_mkcal = 0
@@ -1689,10 +1692,16 @@ class NutritionRepository:
                     )
                     # If this day clears debit, remaining ordinary exercise credit can recover.
                     if not exceptional and debit_repaid_mkcal == opening_debit_mkcal:
-                        recovery_pool_mkcal = min(
-                            max(0, (unused_exercise_mkcal or 0) - repayment_from_exercise_mkcal),
-                            recovery_pool_cap_mkcal or 0,
+                        recovery_amounts = self._recovery_reservations(
+                            min(
+                                max(
+                                    0, (unused_exercise_mkcal or 0) - repayment_from_exercise_mkcal
+                                ),
+                                recovery_pool_cap_mkcal or 0,
+                            ),
+                            recovery_capacity,
                         )
+                        recovery_pool_mkcal = sum(recovery_amounts)
                 outstanding_mkcal = opening_debit_mkcal + debit_added_mkcal - debit_repaid_mkcal
 
             internal[current_date] = {
@@ -1742,10 +1751,7 @@ class NutritionRepository:
                 "unsettled_dates": list(unsettled_dates),
             }
             if recovery_pool_mkcal is not None and recovery_pool_mkcal > 0:
-                first = (recovery_pool_mkcal * RECOVERY_WEIGHTS_PERMILLE[0] + 500) // 1_000
-                second = (recovery_pool_mkcal * RECOVERY_WEIGHTS_PERMILLE[1] + 500) // 1_000
-                amounts = (first, second, recovery_pool_mkcal - first - second)
-                for offset, amount in enumerate(amounts, start=1):
+                for offset, amount in enumerate(recovery_amounts, start=1):
                     pending.setdefault(current_date + timedelta(days=offset), []).append(
                         (current_date, offset, amount)
                     )

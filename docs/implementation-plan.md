@@ -134,9 +134,11 @@ Acceptance criteria:
 - [x] Every positive amount of unused credited exercise is weighted
   into a recoverable pool capped from the next-day deficit, then weighted
   50%/30%/20% over the next three days.
-- [x] Each destination is independently capped at its planned deficit; clipped
-  overflow and missed allocations expire without redistribution. Colliding
-  allocations share the aggregate destination cap proportionally.
+- [x] Each destination is independently capped at its planned deficit. Earlier
+  source reservations take priority; later candidates reserve only remaining
+  capacity. Unreserved unused budget repays eligible source-day debit before
+  expiring. Unused incoming recovery repays eligible destination-day debit before
+  expiring, without redistribution.
 - [x] Corrections and deletion deterministically update all affected days while
   retaining auditable source facts.
 - [x] Unit, repository, migration, MCP contract, and Streamable HTTP tests cover

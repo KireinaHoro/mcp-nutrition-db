@@ -248,7 +248,7 @@ def test_hike_reserves_recovery_before_repaying_and_pauses_restriction(
     assert balance(repo, "2026-09-16")["debit"]["additional_deficit_kcal"] == 200
 
 
-def test_recovery_cannot_repay_debit_twice_and_clipped_reserve_expires(
+def test_recovery_cannot_repay_debit_twice_and_prior_reservations_survive(
     repo: NutritionRepository,
 ) -> None:
     food(repo, "2026-09-09", 5300)
@@ -257,7 +257,8 @@ def test_recovery_cannot_repay_debit_twice_and_clipped_reserve_expires(
         food(repo, day, 2455.94)
     hike = balance(repo, "2026-09-12")
     assert hike["debit"]["repaid_kcal"] == 1677.66
-    assert hike["recovery_pool_expired_at_creation_kcal"] > 0
+    assert hike["recovery_pool_expired_at_creation_kcal"] == 0
+    assert balance(repo, "2026-09-13")["recovery_pool_kcal"] == 700
     for day in range(12, 17):
         result = balance(repo, f"2026-09-{day}")
         assert result["incoming_recovery_kcal"] <= 500
@@ -331,8 +332,8 @@ def test_effective_date_and_no_references_to_other_policies(repo: NutritionRepos
     food(repo, "2026-09-08", 10000)
     assert balance(repo, "2026-09-09")["debit"]["opening_kcal"] == 0
     policy = json.dumps(repo.energy_policy())
-    assert "energy-credit/v5" in policy
-    assert all(version not in policy for version in ["v1", "v2", "v3"])
+    assert "energy-credit/v6" in policy
+    assert all(version not in policy for version in ["v1", "v2", "v3", "v4", "v5"])
 
 
 def test_day_with_unknown_calories_does_not_repay(repo: NutritionRepository) -> None:
@@ -423,3 +424,130 @@ def test_served_policy_is_complete_and_matches_document(repo: NutritionRepositor
     assert policy["policy_text"] == document.read_text()
     assert "unadjusted_budget =" in policy["policy_text"]
     assert all(f"energy-credit/v{version}" not in json.dumps(policy) for version in range(1, 5))
+
+
+def test_collision_reserves_only_capacity_and_repays_source_day(repo: NutritionRepository) -> None:
+    food(repo, "2026-09-09", 4314.547)
+    training(repo, "2026-09-26", 1000, 180, "high")
+    food(repo, "2026-09-26", 2000)
+    earlier = balance(repo, "2026-09-26")
+    training(repo, "2026-09-27", 2383, 180, "high")
+    food(repo, "2026-09-27", 3110.31)
+
+    assert balance(repo, "2026-09-26") == earlier
+    later = balance(repo, "2026-09-27")
+    assert later["recovery_pool_kcal"] == 700
+    assert [item["scheduled_kcal"] for item in later["recovery_schedule"]] == [200, 300, 200]
+    assert later["recovery_pool_expired_at_creation_kcal"] == 0
+    assert later["exercise_credit_expired_at_creation_kcal"] == 0
+    assert later["exercise_credit_used_for_debit_kcal"] == 1072.69
+    assert later["debit"]["repaid_kcal"] == 1072.69
+    assert balance(repo, "2026-09-28")["debit"]["opening_kcal"] == 741.857
+    assert [balance(repo, f"2026-09-{day}")["incoming_recovery_kcal"] for day in (28, 29, 30)] == [
+        500,
+        500,
+        200,
+    ]
+
+    # A later activity cannot steal any of the earlier sources' reservations.
+    training(repo, "2026-09-28", 1000, 180, "high")
+    food(repo, "2026-09-28", 2500)
+    assert balance(repo, "2026-09-27") == later
+    third = balance(repo, "2026-09-28")
+    assert third["recovery_pool_kcal"] == 500
+    assert [item["scheduled_kcal"] for item in third["recovery_schedule"]] == [0, 300, 200]
+    assert third["debit"]["repaid_kcal"] == 500
+
+
+@pytest.mark.parametrize("intake_state", ["open", "missing", "unknown"])
+def test_collision_does_not_bypass_settlement(repo: NutritionRepository, intake_state: str) -> None:
+    food(repo, "2026-09-09", 4500)
+    training(repo, "2026-09-26", 1000, 180, "high")
+    food(repo, "2026-09-26", 2000)
+    training(repo, "2026-09-27", 1000, 180, "high")
+    if intake_state == "open":
+        food(repo, "2026-09-27", 2500)
+        repo.clock = lambda: datetime(2026, 9, 27, 12, tzinfo=UTC)
+    elif intake_state == "unknown":
+        repo.create_entry(
+            LogEntryInput.model_validate(
+                {
+                    "occurred_at": "2026-09-27T18:00:00+02:00",
+                    "kind": "dinner",
+                    "title": "Unknown meal",
+                    "components": [
+                        {
+                            "name": "Food",
+                            "source": {"type": "user_provided"},
+                            "nutrition": {"protein_g": 10},
+                        }
+                    ],
+                }
+            )
+        )
+    result = balance(repo, "2026-09-27")
+    assert result["debit"]["repaid_kcal"] == 0
+    assert result["exercise_credit_used_for_debit_kcal"] == 0
+    if intake_state != "unknown":
+        assert result["recovery_pool_kcal"] == 700
+
+
+def test_destination_caps_and_late_corrections_recalculate_reservations(
+    repo: NutritionRepository,
+) -> None:
+    food(repo, "2026-09-09", 5500)
+    training(repo, "2026-09-26", 1000, 180, "high")
+    meal = food(repo, "2026-09-26", 2000)
+    training(repo, "2026-09-27", 1000, 180, "high")
+    food(repo, "2026-09-27", 2500)
+    repo.set_goals(
+        GoalInput(
+            effective_from=date(2026, 9, 29),
+            base_burn_kcal=2500,
+            deficit_kcal=100,
+            reason="Smaller destination cap",
+        )
+    )
+    first = balance(repo, "2026-09-26")
+    second = balance(repo, "2026-09-27")
+    assert first["recovery_pool_kcal"] == 900
+    assert first["debit"]["repaid_kcal"] == 100
+    assert second["recovery_pool_kcal"] == 300
+    assert [item["scheduled_kcal"] for item in second["recovery_schedule"]] == [200, 0, 100]
+    assert second["debit"]["repaid_kcal"] == 700
+    repo.update_entry(
+        meal["entry_id"],
+        expected_revision=meal["revision"],
+        reason="Correct intake",
+        changes=EntryChanges.model_validate(
+            {
+                "components": [
+                    {
+                        "name": "Food",
+                        "source": {"type": "user_provided"},
+                        "nutrition": {"calories_kcal": 2800},
+                    }
+                ],
+            }
+        ),
+    )
+    corrected = balance(repo, "2026-09-27")
+    assert [item["scheduled_kcal"] for item in corrected["recovery_schedule"]] == [300, 60, 100]
+    assert corrected["debit"]["repaid_kcal"] == 140
+
+
+@pytest.mark.parametrize("opening_debt", [0, 100, 2000])
+def test_unreserved_collision_credit_repayment_is_capped(
+    repo: NutritionRepository, opening_debt: int
+) -> None:
+    food(repo, "2026-09-09", 2500 + opening_debt)
+    for day, intake in [("2026-09-26", 2000), ("2026-09-27", 2500)]:
+        training(repo, day, 1000, 180, "high")
+        food(repo, day, intake)
+    result = balance(repo, "2026-09-27")
+    repaid = min(opening_debt, 300)
+    assert result["recovery_pool_kcal"] == 700
+    assert result["debit"]["repaid_kcal"] == repaid
+    assert result["exercise_credit_used_for_debit_kcal"] == repaid
+    assert result["exercise_credit_expired_at_creation_kcal"] == 300 - repaid
+    assert result["recovery_pool_expired_at_creation_kcal"] == 0

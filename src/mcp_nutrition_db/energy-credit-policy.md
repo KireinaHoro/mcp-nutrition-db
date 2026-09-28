@@ -1,7 +1,7 @@
 # Energy, recovery, and surplus policy
 
-- Policy ID: `energy-credit/v5`
-- Accepted: 2026-09-13
+- Policy ID: `energy-credit/v6`
+- Accepted: 2026-09-28
 - Debit accounting begins: 2026-09-09, in the selected accounting timezone
 - Calculation basis: current policy, recalculated from current audited facts
 
@@ -144,23 +144,36 @@ unused_exercise = credited_exercise - exercise_used
 pool_cap = next_day_planned_deficit / 0.50
 ```
 
-On exceptional activity days, reserve `min(unused_exercise, pool_cap)` **before**
-repaying debit. The remaining unused budget repays opening debit on settlement;
-it is not excluded because the activity was exceptional. Split the reserve into
-next-day / second-day / third-day
-candidates of 50% / 30% / 20%. Their protected status survives outstanding debit.
-Incoming candidates share the destination day's planned-deficit cap. Collisions
-are reduced proportionally with deterministic integer rounding. Clipped allocations expire and are never redistributed or credited as repayment.
+On exceptional activity days, start with `min(unused_exercise, pool_cap)` and
+split it into next-day / second-day / third-day candidates of 50% / 30% / 20%,
+using deterministic integer rounding. For each destination, subtract existing
+reservations from earlier source days from its planned-deficit cap. Clip the new
+candidate to that remaining capacity. **Reserve only the sum of these fitted
+allocations before repaying debit.** Their protected status survives outstanding
+debit. Later source days cannot reduce earlier reservations.
+
+Credit excluded by a destination cap remains unreserved unused exercise and
+participates in source-day repayment on settlement, capped by opening debit;
+any excess expires. Do not redistribute clipped candidates or split the fitted
+pool again. The 50% / 30% / 20% weights describe the initial candidates; the
+actual reservation can have a different shape when capacity is occupied.
 Allocated but unconsumed recovery can repay debit on its destination day only;
-any remainder expires. Reserving the source pool before destination clipping avoids
-future-day collisions changing an already allocated source repayment.
+any remainder expires. Pending ordinary reservations occupy capacity until their
+destination is processed, even if outstanding debit subsequently cancels them.
+Cancellation does not retrospectively enlarge another source's reservation.
+
+For example, an earlier source reserves 300 / 200 / 0 kcal on the next three
+destinations. With a 500 kcal daily cap, a later source's 500 / 300 / 200
+candidates fit as 200 / 300 / 200. Its reserved pool is 700 kcal, leaving an
+additional 300 kcal eligible for source-day repayment. Aggregate recovery on
+those destinations is 500 / 500 / 200 kcal.
 
 On ordinary activity days with outstanding debit, new carryover is suspended
 until the day's observed repayment clears that debit. Any remaining unused
 exercise can then generate ordinary capped recovery. Incoming ordinary
 carryover is also suspended while a day opens with debit. Cancellation does
 not itself count as repayment. With no outstanding debit, ordinary exercise
-uses the same capped recovery pool and taper.
+uses the same candidate taper and remaining-capacity reservation rule.
 
 Conservation for each source day:
 
@@ -233,3 +246,10 @@ not maintain a hidden balance.
 `incoming_recovery_repaid_kcal` is the portion used to repay debit. On closed
 days, `incoming_recovery_expired_kcal` excludes that repayment. On an open day,
 repayment remains zero and expiry is unknown until settlement.
+
+`recovery_pool_kcal` is the sum reserved after destination-capacity clipping.
+Each schedule's `candidate_kcal` is that fitted reservation; `scheduled_kcal`
+can be smaller if ordinary carryover is cancelled by destination-day debit.
+`recovery_pool_expired_at_creation_kcal` measures reserved credit subsequently
+cancelled, not credit excluded before reservation. Unreserved exercise appears
+in repayment or `exercise_credit_expired_at_creation_kcal`, as applicable.
