@@ -54,7 +54,10 @@ portions or ingredients. Preserve per-component source provenance and uncertaint
 about today, pass a relative_day window instead of calculating timestamps. Preserve training
 measurement method, evidence, and confidence. Outstanding surplus produces a bounded additional
 deficit on subsequent eligible days. Repeated overshoots extend repayment without increasing the
-daily adjustment. Do not classify overshoots or ask about travel or return dates for accounting.
+daily adjustment. New debit is intake above base burn plus credited exercise plus incoming
+recovery. Incoming recovery and forgiveness of the missed ordinary deficit are additive;
+recovery does not increase estimated same-day expenditure. Do not classify overshoots or ask
+about travel or return dates for accounting.
 Exceptional (extraordinary) activity days DO repay opening debit from unused budget after
 reserving the capped protected recovery pool. Activity and recovery pauses apply only to
 requested additional restriction, never to observed repayment. Zero additional_deficit_kcal

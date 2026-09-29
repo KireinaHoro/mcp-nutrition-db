@@ -6,7 +6,7 @@ from datetime import date
 from importlib.resources import files
 from typing import Any
 
-POLICY_ID = "energy-credit/v6"
+POLICY_ID = "energy-credit/v7"
 DEBIT_EFFECTIVE_FROM = date(2026, 9, 9)
 DAILY_ADJUSTMENT_MKCAL = 200_000
 EXCEPTIONAL_BURN_MKCAL = 1_000_000
@@ -49,7 +49,10 @@ def energy_policy() -> dict[str, Any]:
         ],
         "debit": {
             "effective_from": DEBIT_EFFECTIVE_FROM.isoformat(),
-            "creation": "max(0, logged_intake - base_burn - credited_training_burn)",
+            "creation": (
+                "max(0, logged_intake - base_burn - credited_training_burn - incoming_recovery)"
+            ),
+            "incoming_recovery": "additive_to_missed_ordinary_deficit_forgiveness",
             "missed_ordinary_deficit": "forgiven",
             "adjustment_start": "next_day_with_opening_debit_unless_activity_or_recovery_pause",
             "repeat_overshoots": "add_surplus_to_debit; never_stack_daily_adjustments",

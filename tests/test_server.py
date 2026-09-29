@@ -128,7 +128,14 @@ def test_streamable_http_initializes_and_calls_policy(
             )
             assert policy.status_code == 200
             structured = policy.json()["result"]["structuredContent"]
-            assert structured["policy_id"] == "energy-credit/v6"
+            assert structured["policy_id"] == "energy-credit/v7"
+            assert structured["debit"]["creation"] == (
+                "max(0, logged_intake - base_burn - credited_training_burn - incoming_recovery)"
+            )
+            assert (
+                "debit_threshold = estimated_maintenance + incoming_recovery"
+                in (structured["policy_text"])
+            )
             assert structured["recovery_pool_cap"] == (
                 "next_day_planned_deficit / first_recovery_weight"
             )

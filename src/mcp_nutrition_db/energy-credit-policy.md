@@ -1,7 +1,7 @@
 # Energy, recovery, and surplus policy
 
-- Policy ID: `energy-credit/v6`
-- Accepted: 2026-09-28
+- Policy ID: `energy-credit/v7`
+- Accepted: 2026-09-29
 - Debit accounting begins: 2026-09-09, in the selected accounting timezone
 - Calculation basis: current policy, recalculated from current audited facts
 
@@ -57,16 +57,27 @@ ceilings. They are never prescriptions to consume every estimated calorie.
 From the debit effective date onwards:
 
 ```text
-new_debit = max(0, logged_intake - estimated_maintenance)
+debit_threshold = estimated_maintenance + incoming_recovery
+new_debit = max(0, logged_intake - debit_threshold)
 closing_debit = opening_debit + new_debit - actual_repayment
 ```
 
-The missed ordinary deficit is forgiven. Intake between the ordinary target
-and maintenance creates no additional debit. It can repay debit when incoming
-recovery or exercise leaves unused unadjusted budget.
+The missed ordinary deficit is forgiven independently of incoming recovery.
+Incoming recovery is reserved exercise allowance from earlier days and raises
+the debit threshold in full, in addition to that forgiveness. It does not raise
+estimated same-day expenditure. Intake up to maintenance plus incoming recovery
+creates no new debit. Avoided debit is capped at the otherwise-created debit;
+it is not repayment. Only unused unadjusted budget can repay opening debit.
+
+For example, with 2,500 base burn, 500 planned deficit, 500 incoming recovery,
+760.8 credited exercise and 3,839 intake, the optional intake ceiling is 3,260.8
+when additional restriction is paused. Estimated maintenance is also 3,260.8,
+but the debit threshold is 3,760.8 and new debit is 78.2 kcal.
+The 500 planned deficit is forgiven separately from the 500 reserved credit.
 Outstanding debit has no weekly cap, expiry, or automatic forgiveness.
 
-Above-maintenance intake accrues from current logged facts. Today remains provisional.
+Intake above the debit threshold accrues as debt from current logged facts.
+Today remains provisional.
 Once a local calendar day has passed, its logged intake automatically participates in
 repayment if at least one active intake entry exists and every component has known
 calories. No confirmation, timer, background job, or persisted closing event is needed:
@@ -211,8 +222,9 @@ thresholds, or manually chosen repayment start dates. Additional deficit starts
 on the next day with opening debit, subject only to goal and activity/recovery
 eligibility.
 
-Another day above maintenance adds its actual surplus to the balance. Missing
-the adjusted target while remaining below maintenance creates no new debit:
+Another day above maintenance plus incoming recovery adds its uncovered surplus
+to the balance. Missing the adjusted target while remaining below the debit
+threshold creates no new debit:
 it simply achieves less or no repayment. Neither case stacks reductions or
 raises the next day's daily cap. The projected repayment period gets longer.
 For example, three days with surpluses of 2,800, 700, and 1,000 kcal leave 4,500

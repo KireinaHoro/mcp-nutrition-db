@@ -248,7 +248,7 @@ def advance_day(
         and goal is not None
     )
     if debit_active and current_date <= today and goal is not None:
-        debit_added_mkcal = max(0, intake_mkcal - base_mkcal - credited_mkcal)
+        debit_added_mkcal = max(0, intake_mkcal - base_mkcal - credited_mkcal - incoming_mkcal)
         if not intake_logged or not intake_complete or provisional:
             state.unsettled_dates.append(current_date.isoformat())
         if repayment_eligible:

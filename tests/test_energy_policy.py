@@ -332,8 +332,8 @@ def test_effective_date_and_no_references_to_other_policies(repo: NutritionRepos
     food(repo, "2026-09-08", 10000)
     assert balance(repo, "2026-09-09")["debit"]["opening_kcal"] == 0
     policy = json.dumps(repo.energy_policy())
-    assert "energy-credit/v6" in policy
-    assert all(version not in policy for version in ["v1", "v2", "v3", "v4", "v5"])
+    assert "energy-credit/v7" in policy
+    assert all(version not in policy for version in ["v1", "v2", "v3", "v4", "v5", "v6"])
 
 
 def test_day_with_unknown_calories_does_not_repay(repo: NutritionRepository) -> None:
@@ -551,3 +551,53 @@ def test_unreserved_collision_credit_repayment_is_capped(
     assert result["exercise_credit_used_for_debit_kcal"] == repaid
     assert result["exercise_credit_expired_at_creation_kcal"] == 300 - repaid
     assert result["recovery_pool_expired_at_creation_kcal"] == 0
+
+
+@pytest.mark.parametrize(
+    ("intake", "exercise", "expected_added"),
+    [(2904, 0, 0), (3000, 0, 0), (3000.001, 0, 0.001), (3839, 760.8, 78.2)],
+)
+@pytest.mark.parametrize("settled", [False, True])
+def test_recovery_and_deficit_forgiveness_are_additive(
+    repo: NutritionRepository, intake: float, exercise: float, expected_added: float, settled: bool
+) -> None:
+    food(repo, "2026-09-09", 3500)
+    food(repo, "2026-09-12", 2000)
+    training(repo, "2026-09-12", burn=1000, confidence="high")
+    food(repo, "2026-09-13", intake)
+    if exercise:
+        training(repo, "2026-09-13", burn=exercise, duration=60, confidence="high")
+    repo.clock = lambda: datetime(2026, 9, 14 if settled else 13, 20, tzinfo=UTC)
+    result = balance(repo, "2026-09-13")
+    assert result["incoming_recovery_kcal"] == 500
+    assert result["debit"]["opening_kcal"] == 1000
+    assert result["debit"]["added_kcal"] == expected_added
+    assert result["debit"]["repaid_kcal"] == 0
+    assert result["debit"]["closing_kcal"] == 1000 + expected_added
+    assert result["provisional"] is not settled
+    assert result["recovery_pool_kcal"] == 0
+
+
+def test_recovery_correction_recalculates_debt_and_later_repayment(
+    repo: NutritionRepository,
+) -> None:
+    food(repo, "2026-09-12", 2000)
+    source = training(repo, "2026-09-12", burn=1000, confidence="high")
+    food(repo, "2026-09-13", 3100)
+    food(repo, "2026-09-14", 2000)
+    assert balance(repo, "2026-09-13")["debit"]["added_kcal"] == 100
+    later = balance(repo, "2026-09-14")
+    assert later["incoming_recovery_repaid_kcal"] == 100
+    assert later["incoming_recovery_expired_kcal"] == 200
+    assert later["debit"]["closing_kcal"] == 0
+    repo.update_training(
+        source["training_id"],
+        expected_revision=1,
+        reason="Correct source burn",
+        changes=TrainingChanges(reported_burn_kcal=400),
+    )
+    assert balance(repo, "2026-09-13")["incoming_recovery_kcal"] == 200
+    assert balance(repo, "2026-09-13")["debit"]["added_kcal"] == 400
+    later = balance(repo, "2026-09-14")
+    assert later["incoming_recovery_repaid_kcal"] == 120
+    assert later["debit"]["closing_kcal"] == 280
