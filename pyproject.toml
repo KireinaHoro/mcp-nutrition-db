@@ -13,9 +13,14 @@ authors = [{ name = "KireinaHoro" }]
 dependencies = [
   "mcp>=1.29,<2",
   "pydantic>=2.11,<3",
+  "garminconnect==0.3.16",
+  "curl_cffi==0.16.0",
+  "requests==2.34.2",
+  "ua-generator==2.1.6",
 ]
 
 [project.scripts]
+garmin-login = "mcp_nutrition_db.garmin_auth:main"
 mcp-nutrition-db = "mcp_nutrition_db.cli:main"
 
 [tool.setuptools.packages.find]

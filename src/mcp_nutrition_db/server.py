@@ -41,6 +41,7 @@ from .tool_support import (
     tool_call,
     window_with_default,
 )
+from .weight_server import WEIGHT_INSTRUCTIONS, register_weight_tools
 
 INSTRUCTIONS = """Calorie accounting distinguishes the ordinary target, incoming recovery
 allowance, and confidence-adjusted exercise allowance. An allowance is an optional ceiling, not
@@ -79,7 +80,7 @@ def create_server(
     validate_timezone(default_timezone)
     server = FastMCP(
         "mcp-nutrition-db",
-        instructions=INSTRUCTIONS + INVENTORY_INSTRUCTIONS,
+        instructions=INSTRUCTIONS + INVENTORY_INSTRUCTIONS + WEIGHT_INSTRUCTIONS,
         host=host,
         port=port,
         streamable_http_path="/mcp",
@@ -337,6 +338,9 @@ def create_server(
     @server.tool(
         name="nutrition_set_goals",
         description=(
+            "For explicit goal requests unrelated to weight reviews. Weight-driven "
+            "changes MUST use "
+            "the weight-budget proposal/completion workflow after explicit approval. "
             "Set an effective-dated base daily burn, calorie deficit, and optional macro targets. "
             "The server derives the ordinary target and separate recovery and exercise allowances."
         ),
@@ -440,5 +444,6 @@ def create_server(
                 )
             )
 
+    register_weight_tools(server, repository, default_timezone)
     register_inventory_tools(server, repository, default_timezone)
     return server

@@ -10,7 +10,7 @@ from mcp_nutrition_db import migrations
 from mcp_nutrition_db.database import Database
 
 
-@pytest.mark.parametrize("version", range(1, 6))
+@pytest.mark.parametrize("version", range(1, migrations.SCHEMA_VERSION + 1))
 def test_failed_migration_rolls_back_schema_and_marker_and_can_retry(
     tmp_path, monkeypatch, version
 ):

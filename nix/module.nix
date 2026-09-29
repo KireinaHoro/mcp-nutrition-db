@@ -85,6 +85,14 @@ in
       description = "Name of the persistent directory below /var/lib.";
     };
 
+    garmin = {
+      enable = lib.mkEnableOption "scheduled Garmin weight and activity imports";
+      credentialsFile = lib.mkOption {
+        type = lib.types.strMatching "^/.*";
+        description = "Runtime path to the sops-decrypted Garmin login bundle. Never use a Nix store path or inline secret. A new session_id seeds refreshed runtime tokens once.";
+      };
+    };
+
     backup = {
       enable = lib.mkEnableOption "weekly local incremental nutrition database backups";
 
@@ -120,7 +128,10 @@ in
         assertion = lib.elem cfg.listenAddress [ "127.0.0.1" "::1" "localhost" ];
         message = "services.mcp-nutrition-db.listenAddress must be a loopback address";
       }
-    ];
+    ] ++ lib.optional cfg.garmin.enable {
+      assertion = !(lib.hasPrefix "/nix/store/" cfg.garmin.credentialsFile);
+      message = "Garmin credentialsFile must point to a runtime secret outside the Nix store";
+    };
 
     systemd.services.mcp-nutrition-db = {
       description = "Private MCP nutrition database";
@@ -132,6 +143,8 @@ in
       serviceConfig = {
         Type = "simple";
         DynamicUser = true;
+        User = "mcp-nutrition-db";
+        Group = "mcp-nutrition-db";
         StateDirectory = cfg.stateDirectory;
         StateDirectoryMode = "0700";
         ExecStart = lib.escapeShellArgs [
@@ -169,6 +182,65 @@ in
         RestrictRealtime = true;
         SystemCallArchitectures = "native";
         UMask = "0077";
+      };
+    };
+
+    systemd.services.mcp-nutrition-db-garmin = lib.mkIf cfg.garmin.enable {
+      description = "Garmin nutrition sync";
+      after = [ "network-online.target" "mcp-nutrition-db.service" ];
+      wants = [ "network-online.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        DynamicUser = true;
+        User = "mcp-nutrition-db";
+        Group = "mcp-nutrition-db";
+        StateDirectory = cfg.stateDirectory;
+        StateDirectoryMode = "0700";
+        LoadCredential = [ "garmin-session:${cfg.garmin.credentialsFile}" ];
+        ExecStart = lib.escapeShellArgs [
+          "${cfg.package}/bin/mcp-nutrition-db" "garmin"
+          "--database" "/var/lib/${cfg.stateDirectory}/nutrition.sqlite3"
+          "--state-directory" "/var/lib/${cfg.stateDirectory}/garmin"
+          "--credentials-file" "%d/garmin-session" "sync"
+        ];
+        TimeoutStartSec = "25min";
+        UMask = "0077";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+      };
+    };
+    systemd.services.mcp-nutrition-db-garmin-weekly = lib.mkIf cfg.garmin.enable {
+      description = "Garmin 90-day reconciliation scan";
+      after = [ "network-online.target" "mcp-nutrition-db.service" ];
+      wants = [ "network-online.target" ];
+      serviceConfig = config.systemd.services.mcp-nutrition-db-garmin.serviceConfig // {
+        ExecStart = lib.escapeShellArgs [
+          "${cfg.package}/bin/mcp-nutrition-db" "garmin"
+          "--database" "/var/lib/${cfg.stateDirectory}/nutrition.sqlite3"
+          "--state-directory" "/var/lib/${cfg.stateDirectory}/garmin"
+          "--credentials-file" "%d/garmin-session" "sync" "--weekly"
+        ];
+      };
+    };
+    systemd.timers.mcp-nutrition-db-garmin = lib.mkIf cfg.garmin.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = "*-*-* *:00,30:00";
+        Persistent = true;
+        RandomizedDelaySec = "2min";
+        AccuracySec = "1s";
+      };
+    };
+    systemd.timers.mcp-nutrition-db-garmin-weekly = lib.mkIf cfg.garmin.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = "Sun *-*-* 04:15:00";
+        Persistent = true;
+        RandomizedDelaySec = "2min";
+        AccuracySec = "1s";
       };
     };
 

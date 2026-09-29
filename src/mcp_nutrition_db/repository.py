@@ -349,66 +349,72 @@ class NutritionRepository:
         return self._training_from_row(row)
 
     def create_training(self, request: LogTrainingInput) -> dict[str, Any]:
+        with self.database.connection(write=True) as connection:
+            result = self.create_training_in_transaction(connection, request)
+        return result
+
+    def create_training_in_transaction(
+        self, connection: sqlite3.Connection, request: LogTrainingInput
+    ) -> dict[str, Any]:
         now = self.clock()
         now_text = _timestamp(now)
         digest = create_digest(request)
         cutoff = _timestamp(now - CREATE_RETRY_WINDOW)
-        with self.database.connection(write=True) as connection:
-            connection.execute(
-                "DELETE FROM training_create_fingerprints WHERE created_at < ?", (cutoff,)
-            )
-            if not request.force_new:
-                prior = connection.execute(
-                    """
-                    SELECT f.training_id
-                    FROM training_create_fingerprints AS f
-                    JOIN trainings AS t ON t.training_id = f.training_id
-                    WHERE f.request_digest = ? AND f.created_at >= ?
-                      AND t.deleted_at IS NULL
-                    ORDER BY f.created_at DESC LIMIT 1
-                    """,
-                    (digest, cutoff),
-                ).fetchone()
-                if prior is not None:
-                    training = self._get_training(connection, prior["training_id"])
-                    return {**training, "deduplicated": True}
-
-            training_id = _new_id()
-            connection.execute(
+        connection.execute(
+            "DELETE FROM training_create_fingerprints WHERE created_at < ?", (cutoff,)
+        )
+        if not request.force_new:
+            prior = connection.execute(
                 """
-                INSERT INTO trainings(
-                    training_id, revision, occurred_at, occurred_at_utc, timezone,
-                    activity, duration_milliseconds, calories_burned_mkcal,
-                    confidence, measurement_method, source_type, source_detail,
-                    evidence_json, notes, created_at, updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT f.training_id
+                FROM training_create_fingerprints AS f
+                JOIN trainings AS t ON t.training_id = f.training_id
+                WHERE f.request_digest = ? AND f.created_at >= ?
+                  AND t.deleted_at IS NULL
+                ORDER BY f.created_at DESC LIMIT 1
                 """,
-                (
-                    training_id,
-                    request.occurred_at.isoformat(),
-                    _timestamp(request.occurred_at),
-                    request.timezone,
-                    request.activity,
-                    _scale(request.duration_minutes, 60_000),
-                    _scale(request.reported_burn_kcal, 1_000),
-                    request.confidence.value,
-                    request.measurement_method.value,
-                    request.source.type.value,
-                    request.source.detail,
-                    None if request.evidence is None else request.evidence.model_dump_json(),
-                    request.notes,
-                    now_text,
-                    now_text,
-                ),
+                (digest, cutoff),
+            ).fetchone()
+            if prior is not None:
+                training = self._get_training(connection, prior["training_id"])
+                return {**training, "deduplicated": True}
+
+        training_id = _new_id()
+        connection.execute(
+            """
+            INSERT INTO trainings(
+                training_id, revision, occurred_at, occurred_at_utc, timezone,
+                activity, duration_milliseconds, calories_burned_mkcal,
+                confidence, measurement_method, source_type, source_detail,
+                evidence_json, notes, created_at, updated_at
+            ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                training_id,
+                request.occurred_at.isoformat(),
+                _timestamp(request.occurred_at),
+                request.timezone,
+                request.activity,
+                _scale(request.duration_minutes, 60_000),
+                _scale(request.reported_burn_kcal, 1_000),
+                request.confidence.value,
+                request.measurement_method.value,
+                request.source.type.value,
+                request.source.detail,
+                None if request.evidence is None else request.evidence.model_dump_json(),
+                request.notes,
+                now_text,
+                now_text,
+            ),
+        )
+        if not request.force_new:
+            connection.execute(
+                "INSERT INTO training_create_fingerprints"
+                "(request_digest, training_id, created_at) VALUES (?, ?, ?)",
+                (digest, training_id, now_text),
             )
-            if not request.force_new:
-                connection.execute(
-                    "INSERT INTO training_create_fingerprints"
-                    "(request_digest, training_id, created_at) VALUES (?, ?, ?)",
-                    (digest, training_id, now_text),
-                )
-            training = self._get_training(connection, training_id)
-            return {**training, "deduplicated": False}
+        training = self._get_training(connection, training_id)
+        return {**training, "deduplicated": False}
 
     def get_training(self, training_id: str) -> dict[str, Any]:
         with self.database.connection() as connection:
@@ -421,75 +427,88 @@ class NutritionRepository:
         reason: str,
         changes: TrainingChanges,
     ) -> dict[str, Any]:
-        now_text = _timestamp(self.clock())
         with self.database.connection(write=True) as connection:
-            current = self._get_training(connection, training_id)
-            if current["revision"] != expected_revision:
-                raise RevisionConflictError(
-                    training_id,
-                    expected_revision,
-                    current["revision"],
-                    record_type="training",
-                )
-            fields = changes.model_fields_set
-            values: dict[str, Any] = {}
-            if "occurred_at" in fields:
-                assert changes.occurred_at is not None
-                values["occurred_at"] = changes.occurred_at.isoformat()
-                values["occurred_at_utc"] = _timestamp(changes.occurred_at)
-            if "timezone" in fields:
-                assert changes.timezone is not None
-                values["timezone"] = changes.timezone
-            if "activity" in fields:
-                assert changes.activity is not None
-                values["activity"] = changes.activity
-            if "duration_minutes" in fields:
-                assert changes.duration_minutes is not None
-                values["duration_milliseconds"] = _scale(changes.duration_minutes, 60_000)
-            if "reported_burn_kcal" in fields:
-                assert changes.reported_burn_kcal is not None
-                values["calories_burned_mkcal"] = _scale(changes.reported_burn_kcal, 1_000)
-            if "confidence" in fields:
-                assert changes.confidence is not None
-                values["confidence"] = changes.confidence.value
-            if "measurement_method" in fields:
-                assert changes.measurement_method is not None
-                values["measurement_method"] = changes.measurement_method.value
-            if "source" in fields:
-                assert changes.source is not None
-                values["source_type"] = changes.source.type.value
-                values["source_detail"] = changes.source.detail
-            if "evidence" in fields:
-                values["evidence_json"] = (
-                    None if changes.evidence is None else changes.evidence.model_dump_json()
-                )
-            if "notes" in fields:
-                values["notes"] = changes.notes
-            new_revision = expected_revision + 1
-            values.update(revision=new_revision, updated_at=now_text)
-            assignments = ", ".join(f"{column} = :{column}" for column in values)
-            connection.execute(
-                f"UPDATE trainings SET {assignments} WHERE training_id = :training_id",
-                {**values, "training_id": training_id},
+            result = self.update_training_in_transaction(
+                connection, training_id, expected_revision, reason, changes
             )
-            connection.execute(
-                """
-                INSERT INTO training_revisions(
-                    revision_id, training_id, resulting_revision, operation, reason,
-                    snapshot_json, created_at
-                ) VALUES (?, ?, ?, 'update', ?, ?, ?)
-                """,
-                (
-                    _new_id(),
-                    training_id,
-                    new_revision,
-                    reason,
-                    json.dumps(current, sort_keys=True),
-                    now_text,
-                ),
+        return result
+
+    def update_training_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        training_id: str,
+        expected_revision: int,
+        reason: str,
+        changes: TrainingChanges,
+    ) -> dict[str, Any]:
+        now_text = _timestamp(self.clock())
+        current = self._get_training(connection, training_id)
+        if current["revision"] != expected_revision:
+            raise RevisionConflictError(
+                training_id,
+                expected_revision,
+                current["revision"],
+                record_type="training",
             )
-            updated = self._get_training(connection, training_id)
-            return updated
+        fields = changes.model_fields_set
+        values: dict[str, Any] = {}
+        if "occurred_at" in fields:
+            assert changes.occurred_at is not None
+            values["occurred_at"] = changes.occurred_at.isoformat()
+            values["occurred_at_utc"] = _timestamp(changes.occurred_at)
+        if "timezone" in fields:
+            assert changes.timezone is not None
+            values["timezone"] = changes.timezone
+        if "activity" in fields:
+            assert changes.activity is not None
+            values["activity"] = changes.activity
+        if "duration_minutes" in fields:
+            assert changes.duration_minutes is not None
+            values["duration_milliseconds"] = _scale(changes.duration_minutes, 60_000)
+        if "reported_burn_kcal" in fields:
+            assert changes.reported_burn_kcal is not None
+            values["calories_burned_mkcal"] = _scale(changes.reported_burn_kcal, 1_000)
+        if "confidence" in fields:
+            assert changes.confidence is not None
+            values["confidence"] = changes.confidence.value
+        if "measurement_method" in fields:
+            assert changes.measurement_method is not None
+            values["measurement_method"] = changes.measurement_method.value
+        if "source" in fields:
+            assert changes.source is not None
+            values["source_type"] = changes.source.type.value
+            values["source_detail"] = changes.source.detail
+        if "evidence" in fields:
+            values["evidence_json"] = (
+                None if changes.evidence is None else changes.evidence.model_dump_json()
+            )
+        if "notes" in fields:
+            values["notes"] = changes.notes
+        new_revision = expected_revision + 1
+        values.update(revision=new_revision, updated_at=now_text)
+        assignments = ", ".join(f"{column} = :{column}" for column in values)
+        connection.execute(
+            f"UPDATE trainings SET {assignments} WHERE training_id = :training_id",
+            {**values, "training_id": training_id},
+        )
+        connection.execute(
+            """
+            INSERT INTO training_revisions(
+                revision_id, training_id, resulting_revision, operation, reason,
+                snapshot_json, created_at
+            ) VALUES (?, ?, ?, 'update', ?, ?, ?)
+            """,
+            (
+                _new_id(),
+                training_id,
+                new_revision,
+                reason,
+                json.dumps(current, sort_keys=True),
+                now_text,
+            ),
+        )
+        updated = self._get_training(connection, training_id)
+        return updated
 
     def delete_training(
         self, training_id: str, expected_revision: int, reason: str
@@ -773,6 +792,7 @@ class NutritionRepository:
             "policy_id": ENERGY_POLICY_ID,
             "grouping": request.grouping,
             "groups": summaries,
+            **self.conversation_status(resolved.timezone),
             "resolved_window": resolved.model_dump(mode="json"),
         }
 
@@ -791,6 +811,14 @@ class NutritionRepository:
         }
 
     def set_goals(self, request: GoalInput) -> dict[str, Any]:
+        with self.database.connection(write=True) as connection:
+            result = self.set_goals_in_transaction(connection, request)
+        result["energy_budget"] = self.energy_balance(request.effective_from, request.timezone)
+        return result
+
+    def set_goals_in_transaction(
+        self, connection: sqlite3.Connection, request: GoalInput
+    ) -> dict[str, Any]:
         now_text = _timestamp(self.clock())
         nutrients = (
             {column: None for column, _factor in NUTRIENTS.values()}
@@ -800,86 +828,84 @@ class NutritionRepository:
         nutrients["calories_mkcal"] = None
         base_burn_mkcal = _scale(request.base_burn_kcal, 1_000)
         deficit_mkcal = _scale(request.deficit_kcal, 1_000)
-        with self.database.connection(write=True) as connection:
-            existing = connection.execute(
-                "SELECT * FROM daily_goals WHERE effective_from = ? AND timezone = ?",
-                (request.effective_from.isoformat(), request.timezone),
-            ).fetchone()
-            if existing is None:
-                goal_id = _new_id()
-                connection.execute(
-                    """
-                    INSERT INTO daily_goals(
-                        goal_id, effective_from, timezone, calories_mkcal,
-                        protein_mg, carbohydrate_mg, fat_mg, fiber_mg, sugar_mg,
-                        sodium_mg, base_burn_mkcal, deficit_mkcal,
-                        reason, created_at, updated_at
-                    ) VALUES (
-                        :goal_id, :effective_from, :timezone, :calories_mkcal,
-                        :protein_mg, :carbohydrate_mg, :fat_mg, :fiber_mg,
-                        :sugar_mg, :sodium_mg, :base_burn_mkcal, :deficit_mkcal,
-                        :reason, :created_at, :updated_at
-                    )
-                    """,
-                    {
-                        "goal_id": goal_id,
-                        "effective_from": request.effective_from.isoformat(),
-                        "timezone": request.timezone,
-                        "reason": request.reason,
-                        "created_at": now_text,
-                        "updated_at": now_text,
-                        "base_burn_mkcal": base_burn_mkcal,
-                        "deficit_mkcal": deficit_mkcal,
-                        **nutrients,
-                    },
+        existing = connection.execute(
+            "SELECT * FROM daily_goals WHERE effective_from = ? AND timezone = ?",
+            (request.effective_from.isoformat(), request.timezone),
+        ).fetchone()
+        if existing is None:
+            goal_id = _new_id()
+            connection.execute(
+                """
+                INSERT INTO daily_goals(
+                    goal_id, effective_from, timezone, calories_mkcal,
+                    protein_mg, carbohydrate_mg, fat_mg, fiber_mg, sugar_mg,
+                    sodium_mg, base_burn_mkcal, deficit_mkcal,
+                    reason, created_at, updated_at
+                ) VALUES (
+                    :goal_id, :effective_from, :timezone, :calories_mkcal,
+                    :protein_mg, :carbohydrate_mg, :fat_mg, :fiber_mg,
+                    :sugar_mg, :sodium_mg, :base_burn_mkcal, :deficit_mkcal,
+                    :reason, :created_at, :updated_at
                 )
-            else:
-                goal_id = existing["goal_id"]
-                connection.execute(
-                    """
-                    INSERT INTO goal_revisions(
-                        revision_id, goal_id, reason, snapshot_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        _new_id(),
-                        goal_id,
-                        request.reason,
-                        json.dumps(self._goal_from_row(existing), sort_keys=True),
-                        now_text,
-                    ),
-                )
-                connection.execute(
-                    """
-                    UPDATE daily_goals SET
-                        calories_mkcal = :calories_mkcal,
-                        protein_mg = :protein_mg,
-                        carbohydrate_mg = :carbohydrate_mg,
-                        fat_mg = :fat_mg,
-                        fiber_mg = :fiber_mg,
-                        sugar_mg = :sugar_mg,
-                        sodium_mg = :sodium_mg,
-                        base_burn_mkcal = :base_burn_mkcal,
-                        deficit_mkcal = :deficit_mkcal,
-                        reason = :reason,
-                        updated_at = :updated_at
-                    WHERE goal_id = :goal_id
-                    """,
-                    {
-                        "goal_id": goal_id,
-                        "reason": request.reason,
-                        "updated_at": now_text,
-                        "base_burn_mkcal": base_burn_mkcal,
-                        "deficit_mkcal": deficit_mkcal,
-                        **nutrients,
-                    },
-                )
-            row = connection.execute(
-                "SELECT * FROM daily_goals WHERE goal_id = ?", (goal_id,)
-            ).fetchone()
-            assert row is not None
-            result = self._goal_from_row(row)
-        result["energy_budget"] = self.energy_balance(request.effective_from, request.timezone)
+                """,
+                {
+                    "goal_id": goal_id,
+                    "effective_from": request.effective_from.isoformat(),
+                    "timezone": request.timezone,
+                    "reason": request.reason,
+                    "created_at": now_text,
+                    "updated_at": now_text,
+                    "base_burn_mkcal": base_burn_mkcal,
+                    "deficit_mkcal": deficit_mkcal,
+                    **nutrients,
+                },
+            )
+        else:
+            goal_id = existing["goal_id"]
+            connection.execute(
+                """
+                INSERT INTO goal_revisions(
+                    revision_id, goal_id, reason, snapshot_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    _new_id(),
+                    goal_id,
+                    request.reason,
+                    json.dumps(self._goal_from_row(existing), sort_keys=True),
+                    now_text,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE daily_goals SET
+                    calories_mkcal = :calories_mkcal,
+                    protein_mg = :protein_mg,
+                    carbohydrate_mg = :carbohydrate_mg,
+                    fat_mg = :fat_mg,
+                    fiber_mg = :fiber_mg,
+                    sugar_mg = :sugar_mg,
+                    sodium_mg = :sodium_mg,
+                    base_burn_mkcal = :base_burn_mkcal,
+                    deficit_mkcal = :deficit_mkcal,
+                    reason = :reason,
+                    updated_at = :updated_at
+                WHERE goal_id = :goal_id
+                """,
+                {
+                    "goal_id": goal_id,
+                    "reason": request.reason,
+                    "updated_at": now_text,
+                    "base_burn_mkcal": base_burn_mkcal,
+                    "deficit_mkcal": deficit_mkcal,
+                    **nutrients,
+                },
+            )
+        row = connection.execute(
+            "SELECT * FROM daily_goals WHERE goal_id = ?", (goal_id,)
+        ).fetchone()
+        assert row is not None
+        result = self._goal_from_row(row)
         return result
 
     def _day_reviews(self, timezone: str) -> dict[str, dict[str, Any]]:
@@ -958,6 +984,15 @@ class NutritionRepository:
     def energy_balance(self, on_date: date, timezone: str = DEFAULT_TIMEZONE) -> dict[str, Any]:
         return load_energy_balances(self.database, on_date, on_date, timezone)[on_date.isoformat()]
 
+    def conversation_status(self, timezone: str) -> dict[str, Any]:
+        from .body import BodyRepository
+        from .weight_review import WeightReviewRepository
+
+        return {
+            "weight_budget_review": WeightReviewRepository(self).status(timezone),
+            "garmin_connection": BodyRepository(self.database).sync_status()["connection_hint"],
+        }
+
     def get_goals(
         self,
         *,
@@ -991,6 +1026,7 @@ class NutritionRepository:
             "timezone": timezone,
             "current": current_goal,
             "history": [self._goal_from_row(row) for row in history_rows],
+            **self.conversation_status(timezone),
         }
 
     def revision_history(self, entry_id: str) -> list[dict[str, Any]]:

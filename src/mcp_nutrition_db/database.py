@@ -9,7 +9,7 @@ from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from .migrations import migrate
+from .migrations import SCHEMA_VERSION, migrate
 from .serialization import utc_now
 
 
@@ -33,6 +33,23 @@ class Database:
                 yield connection
 
     def migrate(self) -> None:
+        with self.connection() as check:
+            exists = check.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+            ).fetchone()
+            version = (
+                check.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+                if exists
+                else None
+            )
+        if version and version < SCHEMA_VERSION:
+            from .backup import backup_database
+            from .serialization import new_id
+
+            path = Path(self.path)
+            backup_database(
+                path, path.parent / "migration-backups" / f"schema-{version}-{new_id()}.sqlite3"
+            )
         with self.connection() as connection:
             migrate(connection, self.clock())
             # WAL is persistent. Configure it at startup, not on every read.

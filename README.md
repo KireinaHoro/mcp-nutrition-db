@@ -82,3 +82,6 @@ The MCP endpoint is `http://127.0.0.1:8787/mcp`; readiness is available at
 `http://127.0.0.1:8787/healthz`. The server refuses a non-loopback HTTP bind by
 default. See [local testing](docs/local-testing.md) to attach a new Codex session
 or run the pinned tunnel client for ChatGPT Web.
+
+Garmin scale/workout import, private sops login, connection hints and explicit
+weight-budget reviews are documented in [Garmin sync](docs/garmin-sync.md).

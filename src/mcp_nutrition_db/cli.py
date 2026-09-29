@@ -64,11 +64,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backup.add_argument("--database", required=True, help="source SQLite database path")
     backup.add_argument("--output", required=True, help="destination snapshot path")
+    from .garmin_cli import add_parser
+
+    add_parser(subparsers)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "garmin":
+        from .garmin_cli import run
+
+        try:
+            return run(args)
+        except Exception:
+            print(
+                "Garmin operation failed. Check status and private "
+                "validation/reconciliation reports."
+            )
+            return 1
     database = Path(args.database).expanduser()
 
     if args.command == "backup":

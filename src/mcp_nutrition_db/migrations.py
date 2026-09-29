@@ -253,7 +253,91 @@ CREATE TABLE usda_snapshots (
 CREATE INDEX usda_snapshot_id_time_idx ON usda_snapshots(fdc_id, created_at DESC);
 """
 
-MIGRATIONS = (MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5)
+MIGRATION_6 = """
+CREATE TABLE body_measurements (
+ measurement_id TEXT PRIMARY KEY,
+ account_id TEXT NOT NULL,
+ external_id TEXT NOT NULL,
+ measured_at TEXT NOT NULL,
+ weight_grams INTEGER NOT NULL CHECK(weight_grams > 0),
+ source TEXT NOT NULL,
+ facts_json TEXT NOT NULL,
+ revision INTEGER NOT NULL CHECK(revision > 0),
+ fetched_at TEXT NOT NULL,
+ deleted_at TEXT,
+ UNIQUE(account_id, external_id)
+);
+CREATE INDEX measurement_time_idx ON body_measurements(measured_at DESC, measurement_id DESC);
+CREATE TABLE body_measurement_revisions (
+ measurement_id TEXT NOT NULL REFERENCES body_measurements(measurement_id),
+ revision INTEGER NOT NULL,
+ snapshot_json TEXT NOT NULL,
+ reason TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ PRIMARY KEY(measurement_id, revision)
+);
+CREATE TABLE garmin_accounts (
+ account_id TEXT PRIMARY KEY,
+ auth_state TEXT NOT NULL,
+ validation_json TEXT NOT NULL DEFAULT '{}',
+ activated_at TEXT,
+ last_error TEXT
+);
+CREATE TABLE import_staging (
+ account_id TEXT NOT NULL REFERENCES garmin_accounts(account_id),
+ stream TEXT NOT NULL CHECK(stream IN ('weight','activity')),
+ external_id TEXT NOT NULL,
+ facts_json TEXT NOT NULL,
+ source_hash TEXT NOT NULL,
+ status TEXT NOT NULL,
+ fetched_at TEXT NOT NULL,
+ PRIMARY KEY(account_id, stream, external_id)
+);
+CREATE TABLE external_records (
+ account_id TEXT NOT NULL REFERENCES garmin_accounts(account_id),
+ external_id TEXT NOT NULL,
+ training_id TEXT UNIQUE REFERENCES trainings(training_id),
+ source_hash TEXT NOT NULL,
+ owned_json TEXT NOT NULL,
+ suppressed INTEGER NOT NULL DEFAULT 0 CHECK(suppressed IN (0,1)),
+ PRIMARY KEY(account_id, external_id)
+);
+CREATE TABLE sync_coverage (
+ account_id TEXT NOT NULL REFERENCES garmin_accounts(account_id),
+ stream TEXT NOT NULL,
+ start_date TEXT NOT NULL,
+ end_date TEXT NOT NULL,
+ completed_at TEXT NOT NULL,
+ PRIMARY KEY(account_id, stream, start_date, end_date)
+);
+CREATE TABLE reconciliation_plans (
+ plan_id TEXT PRIMARY KEY,
+ account_id TEXT NOT NULL,
+ snapshot_json TEXT NOT NULL,
+ decisions_json TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ result_json TEXT
+);
+CREATE TABLE weight_review_reminders (
+ timezone TEXT PRIMARY KEY,
+ revision INTEGER NOT NULL,
+ enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+ next_due TEXT NOT NULL,
+ last_completed_at TEXT,
+ last_hinted_at TEXT,
+ snoozed_until TEXT
+);
+CREATE TABLE weight_budget_reviews (
+ proposal_id TEXT PRIMARY KEY,
+ timezone TEXT NOT NULL,
+ proposal_json TEXT NOT NULL,
+ goals_snapshot_json TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ result_json TEXT
+);
+"""
+
+MIGRATIONS = (MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 

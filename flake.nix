@@ -20,7 +20,7 @@
           src = self;
 
           build-system = [ python.pkgs.setuptools ];
-          dependencies = with python.pkgs; [ mcp pydantic ];
+          dependencies = with python.pkgs; [ mcp pydantic garminconnect ];
 
           nativeCheckInputs = with python.pkgs; [ pytestCheckHook ];
           pytestFlags = [ "tests" ];
@@ -44,6 +44,11 @@
       });
 
       apps = forAllSystems (system: {
+        garmin-login = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/garmin-login";
+          meta.description = "Generate a private Garmin session for sops";
+        };
         default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/mcp-nutrition-db";
@@ -57,6 +62,7 @@
         in
         {
           package = self.packages.${system}.default;
+          garmin-shared-state = import ./nix/garmin-service-test.nix { inherit pkgs self system; };
           quality = pkgs.runCommand "mcp-nutrition-db-quality" {
             nativeBuildInputs = [
               (pkgs.python313.withPackages (ps: with ps; [ mcp pydantic mypy ruff ]))
@@ -97,7 +103,7 @@
         {
           default = pkgs.mkShell {
             packages = [
-              (python.withPackages (ps: with ps; [ mcp pydantic pytest mypy ruff ]))
+              (python.withPackages (ps: with ps; [ mcp pydantic garminconnect pytest mypy ruff ]))
               pkgs.sqlite
             ];
           };

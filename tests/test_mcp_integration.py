@@ -44,7 +44,28 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert "durable nutrition record" in (initialized.instructions or "")
 
             tools = await session.list_tools()
-            assert len(tools.tools) == 28
+            assert len(tools.tools) == 35
+
+            status = await session.call_tool("nutrition_get_sync_status", {})
+            assert status.isError is False
+            assert status.structuredContent["connection_hint"]["eligible"] is False
+            weight = await session.call_tool("nutrition_get_body_weight", {})
+            assert weight.structuredContent["measurement"] is None
+            assert weight.structuredContent["weight_budget_review"]["weight_stale"] is True
+            review = await session.call_tool("nutrition_get_weight_budget_review", {})
+            assert review.isError is False
+            assert "goals" in review.structuredContent
+            history = await session.call_tool("nutrition_list_body_measurements", {"limit": 1})
+            assert history.structuredContent["measurements"] == []
+            reminder = await session.call_tool(
+                "nutrition_update_weight_budget_review_reminder",
+                {
+                    "action": "enable",
+                    "expected_revision": 0,
+                },
+            )
+            assert reminder.isError is False
+            assert reminder.structuredContent["enabled"] is True
 
             logged = await session.call_tool(
                 "nutrition_log_entry",
@@ -100,6 +121,36 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                 },
             )
             assert goal.isError is False
+            proposal = await session.call_tool(
+                "nutrition_propose_weight_budget_review",
+                {
+                    "proposal": {
+                        "outcome": "keep",
+                        "measurement_start": "2026-08-01",
+                        "measurement_end": "2026-08-27",
+                        "rationale": "Synthetic review",
+                    }
+                },
+            )
+            assert proposal.isError is False
+            proposal_id = proposal.structuredContent["proposal_id"]
+            denied = await session.call_tool(
+                "nutrition_complete_weight_budget_review",
+                {
+                    "proposal_id": proposal_id,
+                    "user_approved": False,
+                },
+            )
+            assert denied.isError is True
+            approved = await session.call_tool(
+                "nutrition_complete_weight_budget_review",
+                {
+                    "proposal_id": proposal_id,
+                    "user_approved": True,
+                },
+            )
+            assert approved.isError is False
+            assert approved.structuredContent["outcome"] == "keep"
 
             training = await session.call_tool(
                 "nutrition_log_training",
