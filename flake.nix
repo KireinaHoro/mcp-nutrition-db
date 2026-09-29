@@ -57,6 +57,20 @@
         in
         {
           package = self.packages.${system}.default;
+          quality = pkgs.runCommand "mcp-nutrition-db-quality" {
+            nativeBuildInputs = [
+              (pkgs.python313.withPackages (ps: with ps; [ mcp pydantic mypy ruff ]))
+            ];
+          } ''
+            cp -r ${self} source
+            chmod -R u+w source
+            cd source
+            export PYTHONPATH=src
+            ruff format --check src tests
+            ruff check src tests
+            mypy src
+            touch "$out"
+          '';
           nixos-module = (nixpkgs.lib.nixosSystem {
             inherit system;
             modules = [

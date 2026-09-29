@@ -5,13 +5,12 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .inventory_server import INVENTORY_INSTRUCTIONS, register_inventory_tools
 from .models import (
     DEFAULT_TIMEZONE,
     ActivityPlanInput,
@@ -33,11 +32,15 @@ from .models import (
     TrainingSource,
     validate_timezone,
 )
-from .observability import logged_tool_call
-from .repository import NutritionRepository, RepositoryError
-
-# The SDK detects only the unparameterized runtime class for context injection.
-MCPContext = Context
+from .repository import NutritionRepository
+from .tool_support import (
+    DESTRUCTIVE,
+    MUTATING,
+    READ_ONLY,
+    MCPContext,
+    tool_call,
+    window_with_default,
+)
 
 INSTRUCTIONS = """Calorie accounting distinguishes the ordinary target, incoming recovery
 allowance, and confidence-adjusted exercise allowance. An allowance is an optional ceiling, not
@@ -64,31 +67,6 @@ bookkeeping, not an instruction to under-fuel. Use the server's capped additiona
 projected eligible days rather than inventing repayment targets or deadlines.
 Nutrition and exercise estimates are not medical advice."""
 
-READ_ONLY = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
-)
-MUTATING = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=False,
-    openWorldHint=False,
-)
-DESTRUCTIVE = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=False,
-    openWorldHint=False,
-)
-
-
-def _translate_error(error: Exception) -> ToolError:
-    if isinstance(error, RepositoryError | ValueError):
-        return ToolError(str(error))
-    return ToolError("nutrition database operation failed")
-
 
 def create_server(
     repository: NutritionRepository,
@@ -97,7 +75,6 @@ def create_server(
     port: int = 8787,
     default_timezone: str = DEFAULT_TIMEZONE,
 ) -> FastMCP:
-    from .inventory_server import INVENTORY_INSTRUCTIONS, register_inventory_tools
 
     validate_timezone(default_timezone)
     server = FastMCP(
@@ -109,11 +86,6 @@ def create_server(
         stateless_http=True,
         json_response=True,
     )
-
-    def window_with_default(window: QueryWindow) -> QueryWindow:
-        if "timezone" not in window.model_fields_set:
-            return window.model_copy(update={"timezone": default_timezone})
-        return window
 
     @server.custom_route(  # type: ignore[untyped-decorator]
         "/healthz", methods=["GET"], include_in_schema=False
@@ -145,24 +117,21 @@ def create_server(
         estimation: Estimation | None = None,
         force_new: bool = False,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_log_entry", ctx):
-            try:
-                from .models import LogEntryInput
+        with tool_call("nutrition_log_entry", ctx):
+            from .models import LogEntryInput
 
-                return repository.create_entry(
-                    LogEntryInput(
-                        occurred_at=occurred_at,
-                        kind=kind,
-                        title=title,
-                        components=components,
-                        timezone=timezone,
-                        notes=notes,
-                        estimation=estimation,
-                        force_new=force_new,
-                    )
+            return repository.create_entry(
+                LogEntryInput(
+                    occurred_at=occurred_at,
+                    kind=kind,
+                    title=title,
+                    components=components,
+                    timezone=timezone,
+                    notes=notes,
+                    estimation=estimation,
+                    force_new=force_new,
                 )
-            except Exception as error:
-                raise _translate_error(error) from error
+            )
 
     @server.tool(
         name="nutrition_get_entry",
@@ -173,11 +142,8 @@ def create_server(
         entry_id: str,
         ctx: MCPContext,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_get_entry", ctx):
-            try:
-                return repository.get_entry(entry_id)
-            except Exception as error:
-                raise _translate_error(error) from error
+        with tool_call("nutrition_get_entry", ctx):
+            return repository.get_entry(entry_id)
 
     @server.tool(
         name="nutrition_update_entry",
@@ -195,11 +161,8 @@ def create_server(
         changes: EntryChanges,
         ctx: MCPContext,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_update_entry", ctx):
-            try:
-                return repository.update_entry(entry_id, expected_revision, reason, changes)
-            except Exception as error:
-                raise _translate_error(error) from error
+        with tool_call("nutrition_update_entry", ctx):
+            return repository.update_entry(entry_id, expected_revision, reason, changes)
 
     @server.tool(
         name="nutrition_delete_entry",
@@ -212,11 +175,8 @@ def create_server(
         reason: Annotated[str, Field(min_length=1, max_length=500)],
         ctx: MCPContext,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_delete_entry", ctx):
-            try:
-                return repository.delete_entry(entry_id, expected_revision, reason)
-            except Exception as error:
-                raise _translate_error(error) from error
+        with tool_call("nutrition_delete_entry", ctx):
+            return repository.delete_entry(entry_id, expected_revision, reason)
 
     @server.tool(
         name="nutrition_list_entries",
@@ -233,18 +193,15 @@ def create_server(
         cursor: str | None = None,
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_list_entries", ctx):
-            try:
-                return repository.list_entries(
-                    ListEntriesInput(
-                        window=window_with_default(window),
-                        kind=kind,
-                        cursor=cursor,
-                        limit=limit,
-                    )
+        with tool_call("nutrition_list_entries", ctx):
+            return repository.list_entries(
+                ListEntriesInput(
+                    window=window_with_default(window, default_timezone),
+                    kind=kind,
+                    cursor=cursor,
+                    limit=limit,
                 )
-            except Exception as error:
-                raise _translate_error(error) from error
+            )
 
     @server.tool(
         name="nutrition_log_training",
@@ -270,25 +227,22 @@ def create_server(
         notes: Annotated[str | None, Field(max_length=5_000)] = None,
         force_new: bool = False,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_log_training", ctx):
-            try:
-                return repository.create_training(
-                    LogTrainingInput(
-                        occurred_at=occurred_at,
-                        activity=activity,
-                        duration_minutes=duration_minutes,
-                        reported_burn_kcal=reported_burn_kcal,
-                        confidence=confidence,
-                        measurement_method=measurement_method,
-                        source=source,
-                        evidence=evidence,
-                        timezone=timezone,
-                        notes=notes,
-                        force_new=force_new,
-                    )
+        with tool_call("nutrition_log_training", ctx):
+            return repository.create_training(
+                LogTrainingInput(
+                    occurred_at=occurred_at,
+                    activity=activity,
+                    duration_minutes=duration_minutes,
+                    reported_burn_kcal=reported_burn_kcal,
+                    confidence=confidence,
+                    measurement_method=measurement_method,
+                    source=source,
+                    evidence=evidence,
+                    timezone=timezone,
+                    notes=notes,
+                    force_new=force_new,
                 )
-            except Exception as error:
-                raise _translate_error(error) from error
+            )
 
     @server.tool(
         name="nutrition_get_training",
@@ -299,11 +253,8 @@ def create_server(
         training_id: str,
         ctx: MCPContext,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_get_training", ctx):
-            try:
-                return repository.get_training(training_id)
-            except Exception as error:
-                raise _translate_error(error) from error
+        with tool_call("nutrition_get_training", ctx):
+            return repository.get_training(training_id)
 
     @server.tool(
         name="nutrition_update_training",
@@ -321,11 +272,8 @@ def create_server(
         changes: TrainingChanges,
         ctx: MCPContext,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_update_training", ctx):
-            try:
-                return repository.update_training(training_id, expected_revision, reason, changes)
-            except Exception as error:
-                raise _translate_error(error) from error
+        with tool_call("nutrition_update_training", ctx):
+            return repository.update_training(training_id, expected_revision, reason, changes)
 
     @server.tool(
         name="nutrition_delete_training",
@@ -338,11 +286,8 @@ def create_server(
         reason: Annotated[str, Field(min_length=1, max_length=500)],
         ctx: MCPContext,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_delete_training", ctx):
-            try:
-                return repository.delete_training(training_id, expected_revision, reason)
-            except Exception as error:
-                raise _translate_error(error) from error
+        with tool_call("nutrition_delete_training", ctx):
+            return repository.delete_training(training_id, expected_revision, reason)
 
     @server.tool(
         name="nutrition_list_trainings",
@@ -358,15 +303,12 @@ def create_server(
         cursor: str | None = None,
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_list_trainings", ctx):
-            try:
-                return repository.list_trainings(
-                    ListTrainingsInput(
-                        window=window_with_default(window), cursor=cursor, limit=limit
-                    )
+        with tool_call("nutrition_list_trainings", ctx):
+            return repository.list_trainings(
+                ListTrainingsInput(
+                    window=window_with_default(window, default_timezone), cursor=cursor, limit=limit
                 )
-            except Exception as error:
-                raise _translate_error(error) from error
+            )
 
     @server.tool(
         name="nutrition_summarize",
@@ -385,13 +327,12 @@ def create_server(
         ctx: MCPContext,  # type: ignore[type-arg]
         grouping: Literal["day", "whole_range"] = "whole_range",
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_summarize", ctx):
-            try:
-                return repository.summarize(
-                    SummarizeInput(window=window_with_default(window), grouping=grouping)
+        with tool_call("nutrition_summarize", ctx):
+            return repository.summarize(
+                SummarizeInput(
+                    window=window_with_default(window, default_timezone), grouping=grouping
                 )
-            except Exception as error:
-                raise _translate_error(error) from error
+            )
 
     @server.tool(
         name="nutrition_set_goals",
@@ -410,20 +351,17 @@ def create_server(
         targets: NutritionValues | None = None,
         timezone: str = default_timezone,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_set_goals", ctx):
-            try:
-                return repository.set_goals(
-                    GoalInput(
-                        effective_from=effective_from,
-                        timezone=timezone,
-                        base_burn_kcal=base_burn_kcal,
-                        deficit_kcal=deficit_kcal,
-                        targets=targets,
-                        reason=reason,
-                    )
+        with tool_call("nutrition_set_goals", ctx):
+            return repository.set_goals(
+                GoalInput(
+                    effective_from=effective_from,
+                    timezone=timezone,
+                    base_burn_kcal=base_burn_kcal,
+                    deficit_kcal=deficit_kcal,
+                    targets=targets,
+                    reason=reason,
                 )
-            except Exception as error:
-                raise _translate_error(error) from error
+            )
 
     @server.tool(
         name="nutrition_get_goals",
@@ -440,13 +378,10 @@ def create_server(
         timezone: str = default_timezone,
         include_history: bool = True,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_get_goals", ctx):
-            try:
-                return repository.get_goals(
-                    on_date=on_date, timezone=timezone, include_history=include_history
-                )
-            except Exception as error:
-                raise _translate_error(error) from error
+        with tool_call("nutrition_get_goals", ctx):
+            return repository.get_goals(
+                on_date=on_date, timezone=timezone, include_history=include_history
+            )
 
     @server.tool(
         name="nutrition_get_energy_policy",
@@ -458,7 +393,7 @@ def create_server(
         annotations=READ_ONLY,
     )
     def nutrition_get_energy_policy(ctx: MCPContext) -> dict[str, Any]:  # type: ignore[type-arg]
-        with logged_tool_call("nutrition_get_energy_policy", ctx):
+        with tool_call("nutrition_get_energy_policy", ctx):
             return repository.energy_policy()
 
     @server.tool(
@@ -474,11 +409,8 @@ def create_server(
         on_date: date | None = None,
         timezone: str = default_timezone,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_get_activity_plan", ctx):
-            try:
-                return repository.get_activity_plan(on_date, timezone)
-            except Exception as error:
-                raise _translate_error(error) from error
+        with tool_call("nutrition_get_activity_plan", ctx):
+            return repository.get_activity_plan(on_date, timezone)
 
     @server.tool(
         name="nutrition_set_activity_plan",
@@ -497,19 +429,16 @@ def create_server(
         timezone: str = default_timezone,
         expected_revision: Annotated[int, Field(ge=0)] = 0,
     ) -> dict[str, Any]:
-        with logged_tool_call("nutrition_set_activity_plan", ctx):
-            try:
-                return repository.set_activity_plan(
-                    ActivityPlanInput(
-                        on_date=on_date,
-                        exceptional_activity=exceptional_activity,
-                        timezone=timezone,
-                        expected_revision=expected_revision,
-                        reason=reason,
-                    )
+        with tool_call("nutrition_set_activity_plan", ctx):
+            return repository.set_activity_plan(
+                ActivityPlanInput(
+                    on_date=on_date,
+                    exceptional_activity=exceptional_activity,
+                    timezone=timezone,
+                    expected_revision=expected_revision,
+                    reason=reason,
                 )
-            except Exception as error:
-                raise _translate_error(error) from error
+            )
 
     register_inventory_tools(server, repository, default_timezone)
     return server

@@ -420,7 +420,7 @@ def test_recovery_repayment_capped_at_debit_and_remainder_expires(
 
 def test_served_policy_is_complete_and_matches_document(repo: NutritionRepository) -> None:
     policy = repo.energy_policy()
-    document = Path(__file__).parents[1] / "docs/energy-credit-policy.md"
+    document = Path(__file__).parents[1] / "src/mcp_nutrition_db/energy-credit-policy.md"
     assert policy["policy_text"] == document.read_text()
     assert "unadjusted_budget =" in policy["policy_text"]
     assert all(f"energy-credit/v{version}" not in json.dumps(policy) for version in range(1, 5))

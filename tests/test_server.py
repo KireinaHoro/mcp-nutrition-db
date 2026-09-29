@@ -127,3 +127,96 @@ def test_streamable_http_initializes_and_calls_policy(
             )
 
     asyncio.run(exercise())
+
+
+def test_http_lifecycle_partial_summary_and_revision_errors(repository, meal_payload):
+    import json
+
+    app = create_server(repository).streamable_http_app()
+
+    async def exercise():
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8787"
+            ) as client,
+        ):
+            sequence = 0
+
+            async def call(name, arguments):
+                nonlocal sequence
+                sequence += 1
+                response = await client.post(
+                    "/mcp",
+                    headers={"Accept": "application/json, text/event-stream"},
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": sequence,
+                        "method": "tools/call",
+                        "params": {"name": name, "arguments": arguments},
+                    },
+                )
+                assert response.status_code == 200
+                return response.json()["result"]
+
+            created = await call("nutrition_log_entry", meal_payload)
+            entry = created["structuredContent"]
+            updated = await call(
+                "nutrition_update_entry",
+                {
+                    "entry_id": entry["entry_id"],
+                    "expected_revision": 1,
+                    "reason": "HTTP lifecycle",
+                    "changes": {"notes": None},
+                },
+            )
+            assert updated["structuredContent"]["revision"] == 2
+            assert updated["structuredContent"]["notes"] is None
+            stale = await call(
+                "nutrition_update_entry",
+                {
+                    "entry_id": entry["entry_id"],
+                    "expected_revision": 1,
+                    "reason": "Stale request",
+                    "changes": {"notes": "stale"},
+                },
+            )
+            assert stale["isError"]
+            error = json.loads(
+                stale["content"][0]["text"].removeprefix(
+                    "Error executing tool nutrition_update_entry: "
+                )
+            )
+            assert error["code"] == "revision_conflict"
+            assert error["current_revision"] == 2
+            invalid = await call(
+                "nutrition_update_entry",
+                {
+                    "entry_id": entry["entry_id"],
+                    "expected_revision": 2,
+                    "reason": "Invalid null",
+                    "changes": {"title": None},
+                },
+            )
+            assert invalid["isError"]
+            assert repository.get_entry(entry["entry_id"])["revision"] == 2
+            summary = await call(
+                "nutrition_summarize",
+                {
+                    "window": {"type": "calendar_day", "date": "2026-08-27"},
+                },
+            )
+            assert not summary["structuredContent"]["groups"][0]["completeness"]["carbohydrate_g"][
+                "complete"
+            ]
+            deleted = await call(
+                "nutrition_delete_entry",
+                {
+                    "entry_id": entry["entry_id"],
+                    "expected_revision": 2,
+                    "reason": "HTTP cleanup",
+                },
+            )
+            assert deleted["structuredContent"]["deleted"]
+
+    asyncio.run(exercise())

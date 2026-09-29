@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from collections.abc import Callable
+from typing import Annotated, Any, Literal, ParamSpec
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from .inventory_models import FoodDefinition, FoodLink
 from .models import Estimation, FoodAmount, QueryWindow
-from .observability import logged_tool_call
+from .observability import RequestContext
 from .repository import NutritionRepository
-from .server import MUTATING, READ_ONLY, MCPContext, _translate_error
+from .tool_support import MUTATING, READ_ONLY, MCPContext, tool_call, window_with_default
 from .usda import USDAClient
+
+P = ParamSpec("P")
 
 INVENTORY_INSTRUCTIONS = """
 Use inventory references for ordinary food components, including individual ingredients of
@@ -45,15 +48,17 @@ def register_inventory_tools(
     server: FastMCP, repository: NutritionRepository, default_timezone: str
 ) -> None:
     inventory = repository.inventory
-    usda = USDAClient(repository)
+    usda = USDAClient(repository.database)
 
-    def invoke(name: str, ctx: Any, operation: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        with logged_tool_call(name, ctx):
-            try:
-                result: dict[str, Any] = operation(*args, **kwargs)
-                return result
-            except Exception as error:
-                raise _translate_error(error) from error
+    def invoke(
+        name: str,
+        ctx: RequestContext,
+        operation: Callable[P, dict[str, Any]],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> dict[str, Any]:
+        with tool_call(name, ctx):
+            return operation(*args, **kwargs)
 
     @server.tool(
         annotations=READ_ONLY,
@@ -205,8 +210,7 @@ def register_inventory_tools(
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         unlinked_only: bool = True,
     ) -> dict[str, Any]:
-        if "timezone" not in window.model_fields_set:
-            window = window.model_copy(update={"timezone": default_timezone})
+        window = window_with_default(window, default_timezone)
         return invoke(
             "nutrition_find_food_matches",
             ctx,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -181,7 +181,37 @@ class LogEntryInput(StrictModel):
     _valid_timezone = field_validator("timezone")(validate_timezone)
 
 
-class EntryChanges(StrictModel):
+class PatchModel(StrictModel):
+    """Omission leaves a field alone; explicit null only clears nullable fields."""
+
+    nullable_fields: ClassVar[frozenset[str]] = frozenset()
+
+    @model_validator(mode="after")
+    def require_change(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("at least one changed field is required")
+        invalid = sorted(
+            name
+            for name in self.model_fields_set - self.nullable_fields
+            if getattr(self, name) is None
+        )
+        if invalid:
+            raise ValueError("fields cannot be null: " + ", ".join(invalid))
+        return self
+
+    @field_validator("occurred_at", check_fields=False)
+    @classmethod
+    def aware_if_set(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else validate_aware_datetime(value)
+
+    @field_validator("timezone", check_fields=False)
+    @classmethod
+    def timezone_if_set(cls, value: str | None) -> str | None:
+        return None if value is None else validate_timezone(value)
+
+
+class EntryChanges(PatchModel):
+    nullable_fields = frozenset({"notes", "estimation"})
     occurred_at: datetime | None = None
     timezone: str | None = None
     kind: EntryKind | None = None
@@ -191,22 +221,6 @@ class EntryChanges(StrictModel):
         default=None, min_length=1, max_length=100
     )
     estimation: Estimation | None = None
-
-    @field_validator("occurred_at")
-    @classmethod
-    def aware_if_set(cls, value: datetime | None) -> datetime | None:
-        return None if value is None else validate_aware_datetime(value)
-
-    @field_validator("timezone")
-    @classmethod
-    def timezone_if_set(cls, value: str | None) -> str | None:
-        return None if value is None else validate_timezone(value)
-
-    @model_validator(mode="after")
-    def require_change(self) -> EntryChanges:
-        if not self.model_fields_set:
-            raise ValueError("at least one changed field is required")
-        return self
 
 
 class RelativeDayWindow(StrictModel):
@@ -322,7 +336,8 @@ class LogTrainingInput(StrictModel):
     _valid_timezone = field_validator("timezone")(validate_timezone)
 
 
-class TrainingChanges(StrictModel):
+class TrainingChanges(PatchModel):
+    nullable_fields = frozenset({"notes", "evidence"})
     occurred_at: datetime | None = None
     timezone: str | None = None
     activity: str | None = Field(default=None, min_length=1, max_length=200)
@@ -333,22 +348,6 @@ class TrainingChanges(StrictModel):
     source: TrainingSource | None = None
     evidence: TrainingEvidence | None = None
     notes: str | None = Field(default=None, max_length=5_000)
-
-    @field_validator("occurred_at")
-    @classmethod
-    def aware_if_set(cls, value: datetime | None) -> datetime | None:
-        return None if value is None else validate_aware_datetime(value)
-
-    @field_validator("timezone")
-    @classmethod
-    def timezone_if_set(cls, value: str | None) -> str | None:
-        return None if value is None else validate_timezone(value)
-
-    @model_validator(mode="after")
-    def require_change(self) -> TrainingChanges:
-        if not self.model_fields_set:
-            raise ValueError("at least one changed field is required")
-        return self
 
 
 class ListTrainingsInput(StrictModel):

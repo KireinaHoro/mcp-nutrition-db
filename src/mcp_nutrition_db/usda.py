@@ -12,86 +12,23 @@ import math
 import os
 import re
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from .inventory import InventoryError, _json
-from .models import NutritionValues
-from .repository import _new_id, _timestamp
-
-if TYPE_CHECKING:
-    from .repository import NutritionRepository
-
-DATA_TYPES = ("Foundation", "SR Legacy", "Survey (FNDDS)", "Branded")
-# Priority is deliberate: use one energy measure, never sum alternatives.
-NUTRIENT_IDS = {
-    "calories_kcal": ((2048, "kcal"), (2047, "kcal"), (1008, "kcal")),
-    "protein_g": ((1003, "g"),),
-    "carbohydrate_g": ((1005, "g"),),
-    "fat_g": ((1004, "g"),),
-    "fiber_g": ((1079, "g"),),
-    "sugar_g": ((2000, "g"), (1063, "g")),
-    "sodium_mg": ((1093, "mg"),),
-}
-
-
-def normalize_food(raw: dict[str, Any]) -> dict[str, Any]:
-    """FDC full foodNutrients are per 100 g; labelNutrients are NOT interchangeable."""
-    if raw.get("dataType") not in DATA_TYPES:
-        raise ValueError("unsupported USDA data type")
-    nutrients = {}
-    for value in raw.get("foodNutrients", []):
-        nutrient = value.get("nutrient", {})
-        if nutrient.get("id") is not None and value.get("amount") is not None:
-            nutrients[int(nutrient["id"])] = (
-                value["amount"],
-                nutrient.get("unitName", "").casefold(),
-            )
-    values: dict[str, Any] = {}
-    selected = {}
-    normalization_notes = []
-    for name, candidates in NUTRIENT_IDS.items():
-        values[name] = None
-        for nutrient_id, unit in candidates:
-            if nutrient_id in nutrients:
-                amount, actual_unit = nutrients[nutrient_id]
-                if actual_unit != unit:
-                    raise ValueError("unexpected USDA nutrient unit")
-                if isinstance(amount, (int, float)) and amount < 0:
-                    normalization_notes.append(
-                        {
-                            "field": name,
-                            "nutrient_id": nutrient_id,
-                            "issue": "negative_source_value_preserved_as_unknown",
-                            "value": amount,
-                        }
-                    )
-                    break
-                values[name] = amount
-                selected[name] = nutrient_id
-                break
-    nutrition = NutritionValues.model_validate(values).model_dump() if selected else values
-    return {
-        "fdc_id": int(raw["fdcId"]),
-        "description": raw["description"],
-        "data_type": raw["dataType"],
-        "basis": {"quantity": 100, "unit": "g"},
-        "nutrition": nutrition,
-        "nutrition_available": bool(selected),
-        "selected_nutrient_ids": selected,
-        "normalization_notes": normalization_notes,
-        "portions": raw.get("foodPortions", []),
-        "brand": raw.get("brandOwner"),
-        "source_url": f"https://fdc.nal.usda.gov/food-details/{int(raw['fdcId'])}/nutrients",
-        "raw": raw,
-    }
+from .database import Database
+from .errors import InventoryError
+from .serialization import canonical_json as _json
+from .serialization import new_id as _new_id
+from .serialization import timestamp as _timestamp
+from .usda_normalization import DATA_TYPES
+from .usda_normalization import normalize_food as normalize_food
 
 
 class USDAClient:
-    def __init__(self, repository: NutritionRepository) -> None:
-        self.repo = repository
+    def __init__(self, database: Database) -> None:
+        self.database = database
 
     @contextmanager
     def _database(self) -> Iterator[tuple[sqlite3.Connection, dict[str, Any]]]:
@@ -120,7 +57,7 @@ class USDAClient:
                 connection.close()
 
     def search(
-        self, query: str, data_types: list[str] | None = None, page: int = 1, limit: int = 20
+        self, query: str, data_types: Sequence[str] | None = None, page: int = 1, limit: int = 20
     ) -> dict[str, Any]:
         if not query.strip() or len(query) > 300 or not 1 <= page <= 1000 or not 1 <= limit <= 50:
             raise ValueError("invalid USDA search bounds")
@@ -133,7 +70,7 @@ class USDAClient:
             "data_types": sorted(set(data_types or [])),
             "provider": "local_database",
         }
-        now = _timestamp(self.repo.clock())
+        now = _timestamp(self.database.clock())
         result: dict[str, Any] = {
             "lookup_id": _new_id(),
             "query": query,
@@ -154,7 +91,7 @@ class USDAClient:
                     raise InventoryError(
                         "dataset_type_unavailable", reason="requested data types are not installed"
                     )
-                with self.repo._connect() as connection:
+                with self.database.connection() as connection:
                     row = connection.execute(
                         "SELECT result_json FROM usda_lookups WHERE request_json=? "
                         "ORDER BY created_at DESC LIMIT 1",
@@ -210,7 +147,7 @@ class USDAClient:
             result.update(
                 outcome="unavailable", error={"code": error.code, **error.details}, foods=[]
             )
-        with self.repo._connect() as connection:
+        with self.database.connection() as connection:
             connection.execute(
                 "INSERT INTO usda_lookups VALUES (?, ?, ?, ?)",
                 (result["lookup_id"], _json(params), _json(result), now),
@@ -232,10 +169,9 @@ class USDAClient:
         # Content identity includes release and normalization. Old API snapshots
         # and previous dataset releases are never mistaken for the active version.
         snapshot_id = "usda-local-" + hashlib.sha256(_json(snapshot).encode()).hexdigest()
-        now = _timestamp(self.repo.clock())
+        now = _timestamp(self.database.clock())
         snapshot.update(source_snapshot_id=snapshot_id, retrieved_at=now, provider="local_database")
-        with self.repo._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self.database.connection(write=True) as connection:
             row = connection.execute(
                 "SELECT snapshot_json FROM usda_snapshots WHERE source_snapshot_id=?",
                 (snapshot_id,),

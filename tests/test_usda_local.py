@@ -59,7 +59,7 @@ def test_offline_search_filtering_pagination_and_safe_queries(
         raise AssertionError("USDA must never open a network socket")
 
     monkeypatch.setattr(socket, "socket", no_network)
-    client = USDAClient(repository)
+    client = USDAClient(repository.database)
     first = client.search("eggs", limit=1)
     second = client.search("eggs", limit=1, page=2)
     assert first["total_results"] == 2 and first["total_pages"] == 2
@@ -80,7 +80,7 @@ def test_dataset_upgrade_requires_explicit_inventory_revision_and_preserves_meal
     repository, usda_database, meal_payload, monkeypatch
 ):
     old_path = usda_database([raw(), raw(124, "Old food")], release="2025")
-    client = USDAClient(repository)
+    client = USDAClient(repository.database)
     lookup = client.search("egg")
     first = client.get_food(123)
     food = repository.inventory.create_food(definition(first))
@@ -146,7 +146,7 @@ def test_dataset_upgrade_requires_explicit_inventory_revision_and_preserves_meal
 
 
 def test_legacy_api_cache_is_not_used_for_local_lookups(repository, usda_database):
-    with repository._connect() as connection:
+    with repository.database.connection() as connection:
         connection.execute(
             "INSERT INTO usda_snapshots VALUES (?, ?, ?, ?)",
             (
@@ -157,7 +157,7 @@ def test_legacy_api_cache_is_not_used_for_local_lookups(repository, usda_databas
             ),
         )
     usda_database([raw()])
-    snapshot = USDAClient(repository).get_food(123)
+    snapshot = USDAClient(repository.database).get_food(123)
     assert snapshot["nutrition"]["calories_kcal"] == 143
     assert snapshot["dataset"]["release"] == "test-release"
 
@@ -174,11 +174,11 @@ def test_missing_or_bad_database_returns_failure_receipt(repository, tmp_path, m
                 "INSERT INTO metadata VALUES ('dataset', ?)", (json.dumps({"format_version": 999}),)
             )
     monkeypatch.setenv("MCP_NUTRITION_USDA_DATABASE", str(path))
-    result = USDAClient(repository).search("egg")
+    result = USDAClient(repository.database).search("egg")
     assert result["outcome"] == "unavailable"
     assert result["error"]["code"] == "provider_unavailable"
     assert path.exists() == (state != "missing")
-    with repository._connect() as connection:
+    with repository.database.connection() as connection:
         assert connection.execute("SELECT count(*) FROM usda_lookups").fetchone()[0] == 1
 
 
@@ -193,7 +193,7 @@ def test_bulk_null_slots_missing_nutrition_and_negative_values(repository, usda_
         }
     )
     usda_database([raw(), None, empty, negative])
-    client = USDAClient(repository)
+    client = USDAClient(repository.database)
     assert client.search("egg")["dataset"]["null_slots_skipped"] == {"Foundation": 1}
     empty_snapshot = client.get_food(124)
     assert not empty_snapshot["nutrition_available"]

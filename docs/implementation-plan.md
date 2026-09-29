@@ -1,8 +1,8 @@
 # Implementation plan
 
 - Status: Active
-- Last updated: 2026-09-24
-- Current phase: Offline USDA reference database deployed and verified
+- Last updated: 2026-09-29
+- Current phase: Maintainability refactor and deployment validation
 
 This document is the project progress tracker. Update task checkboxes and the
 progress log in the same commit as completed work. A phase is complete only when
@@ -122,8 +122,8 @@ Acceptance criteria:
   from every policy-derived result.
 - [x] Update server instructions and affected tool descriptions so allowances
   are not presented as required intake targets.
-- [x] Recalculate the source day and the following three local days after a
-  relevant meal, training, goal, or policy correction.
+- [x] Recalculate all subsequent affected balances after a relevant meal,
+  training, goal, or policy correction, including recovery destinations.
 
 Acceptance criteria:
 
@@ -389,3 +389,28 @@ Both USDA tools advertise closed-world access. Branded-only searches explicitly
 report uninstalled coverage. Full inventory revisions/provenance and daily
 history/energy summaries compare equal before and after deployment. Application
 CI `35995127010` passed. No historical composition was automatically refreshed.
+
+
+## Maintainability review (2026-09-29)
+
+- [x] Centralize closing connections and atomic, retryable migration execution.
+- [x] Separate typed energy calculation, database loading, and JSON serialization.
+- [x] Share policy constants, credited-burn arithmetic, aggregation, patch validation,
+  request hashing, audit reading, and tool error/logging boundaries.
+- [x] Remove repository/inventory and server/registration dependency cycles.
+- [x] Keep one packaged policy specification and reconcile current API/design docs.
+- [x] Add Ruff formatting/lint and mypy to flake checks used by CI.
+- [x] Complete local regression, package, NixOS, and live-snapshot compatibility checks.
+- [ ] Deploy once and validate service health, database integrity, and live MCP behavior.
+
+Schema remains v5; no stored-record conversion is needed. Summary completeness
+now propagates unknown component nutrients, and null patches reject required fields.
+Energy accounting semantics and stored nutrition snapshots are preserved.
+
+Local verification: 114 tests pass, including injected migration failures/retries,
+concurrent startup, connection cleanup, null patches, partial completeness,
+energy conservation, and the HTTP lifecycle. Ruff, mypy, all x86_64-linux flake
+checks, and the full kage closure build pass. A private production snapshot
+retains all stored rows through repeat migration. Entries, trainings, food
+revisions, nutrient totals, and energy balances compare equal; only incomplete
+summary flags change as intended. Pre-deployment online backup succeeded.

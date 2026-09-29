@@ -11,13 +11,15 @@ so it does not require an nginx route or a public MCP endpoint.
 
 ## Project documents
 
-- [System design](docs/design.md) defines the product boundary, MCP tools, data
-  model, security model, and NixOS deployment.
+- [System design](docs/design.md) defines architecture, module responsibilities,
+  persistence guarantees, and operations.
+- [Nutrition log API](docs/nutrition-api.md) defines entries, trainings, summaries,
+  goals, activity plans, and errors.
 - [Fixed food inventory API](docs/food-inventory-api.md) describes reusable
   foods, portion resolution, history linking, and USDA-first sourcing.
 - [Implementation plan](docs/implementation-plan.md) is the source of truth for
   phases, acceptance criteria, progress, and deferred work.
-- [Exercise and recovery energy-credit policy](docs/energy-credit-policy.md)
+- [Exercise and recovery energy-credit policy](src/mcp_nutrition_db/energy-credit-policy.md)
   defines confidence-adjusted training allowance, non-recurring recovery-day
   credits, bounded surplus repayment, recovery protection, and MCP presentation.
 - [Local testing](docs/local-testing.md) explains direct Codex attachment and
@@ -55,12 +57,12 @@ for coverage, provenance, and the explicit update process.
 Enter the pinned environment and run the checks:
 
 ```console
-nix develop
-PYTHONPATH=src ruff format --check src tests
-PYTHONPATH=src ruff check src tests
-PYTHONPATH=src mypy src
-PYTHONPATH=src pytest
+nix flake check --print-build-logs
 ```
+
+For focused iteration, enter `nix develop` and run `PYTHONPATH=src pytest`,
+`ruff check src tests`, `ruff format --check src tests`, or `PYTHONPATH=src mypy src`.
+These same checks are enforced by the flake and CI.
 
 Run a loopback development server with disposable state:
 

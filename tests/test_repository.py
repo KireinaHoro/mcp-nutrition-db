@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from mcp_nutrition_db.migrations import MIGRATION_1, MIGRATION_2
 from mcp_nutrition_db.models import (
     Confidence,
     EntryChanges,
@@ -21,8 +22,6 @@ from mcp_nutrition_db.models import (
     TrainingSource,
 )
 from mcp_nutrition_db.repository import (
-    MIGRATION_1,
-    MIGRATION_2,
     NotFoundError,
     NutritionRepository,
     RevisionConflictError,
@@ -191,7 +190,7 @@ def test_list_today_summary_and_pagination(repository: NutritionRepository, meal
     summary = repository.summarize(SummarizeInput(window=today(), grouping="whole_range"))
     assert summary["groups"][0]["entry_count"] == 2
     assert summary["groups"][0]["totals"]["calories_kcal"] == 968
-    assert summary["groups"][0]["completeness"]["carbohydrate_g"]["complete"] is True
+    assert summary["groups"][0]["completeness"]["carbohydrate_g"]["complete"] is False
 
 
 def test_effective_dated_goals(repository: NutritionRepository) -> None:
@@ -650,3 +649,22 @@ def test_incomplete_calorie_data_does_not_create_recovery_credit(
     assert balance["intake_complete"] is False
     assert balance["unused_exercise_credit_kcal"] is None
     assert balance["recovery_schedule"] == []
+
+
+@pytest.mark.parametrize("grouping", ["day", "whole_range"])
+def test_summary_propagates_partial_nutrients_without_discarding_known_totals(
+    repository, meal, grouping
+):
+    entry = repository.create_entry(meal)
+    summary = repository.summarize(SummarizeInput(window=today(), grouping=grouping))["groups"][0]
+    assert summary["totals"] == entry["totals"]
+    for nutrient in entry["totals"]:
+        assert (
+            summary["completeness"][nutrient]["complete"]
+            == entry["completeness"][nutrient]["complete"]
+        )
+    assert summary["completeness"]["carbohydrate_g"] == {
+        "known_entries": 1,
+        "total_entries": 1,
+        "complete": False,
+    }

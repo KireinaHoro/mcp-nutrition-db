@@ -50,11 +50,6 @@ suitable USDA profile is available, with the reason and actual value origins
 recorded on the item. Existing exact-product label evidence remains usable;
 USDA preference does not replace a verified product label with a generic food.
 
-Recent history was sampled read-only to ground this proposal. The Pizzaknopf
-example already occurs as measured grams scaled from an earlier piece estimate.
-The local SQLite file contains only three August 27 entries, so it must not be
-treated as the complete history for the eventual conversion.
-
 ## 2. Food definition
 
 `FoodDefinition` contains:
@@ -289,7 +284,7 @@ Conversion means linking component occurrences to a food identity and revision.
 Meals themselves are never deduplicated: eating the same food twice is valid.
 Name equality or equal calories alone does not establish product identity.
 
-Three proposed tools separate discovery from a concrete, atomic conversion:
+Three tools separate discovery from a concrete, atomic conversion:
 
 ### `nutrition_find_food_matches`
 
@@ -298,15 +293,17 @@ Inputs: required bounded `window` using existing calendar semantics; optional
 
 Returns component occurrences with `entry_id`, `entry_revision`, `component_id`,
 original identity/portion/nutrition/source, and candidate inventory matches.
-Each candidate contains evidence, contradictions, proposed amount (nullable),
-and classification `supported`, `ambiguous`, or `incompatible`. Without a food
-filter, include repeated-name groups and suggested catalog seeds. Grouping is
-only a discovery aid; uncertain pack sizes or identities remain unresolved.
+Each candidate contains its food ID/revision, short name, an evidence label,
+`proposed_amount:null`, and `classification:ambiguous`. Without `food_id`, matching
+uses exact normalized display-name/alias search terms (at most ten candidates per
+component); an explicit `food_id` supplies that food as a comparison candidate.
+The optional `query` filters historical component names by normalized tokens.
+Vendor, preparation, portion, and identity assessment are the caller's responsibility;
+this endpoint does not classify supported/incompatible identities or group repeats.
 
-Matching considers vendor/variant/preparation, identifiers, declared portion
-evidence, and the full known nutrient vector. Nutrition equivalence compares
-server-rounded scaled integers, including the null mask. Unknown-versus-known
-is a difference. There is no silent tolerance or averaging of conflicting
+Preview compares supplied amounts against canonical nutrition using server-rounded
+scaled integers, including the null mask. Unknown-versus-known is a difference.
+There is no silent tolerance or averaging of conflicting
 profiles. Rounded historical estimates can still be linked by identity while
 retaining their numeric differences. Never reverse-engineer consumed weight
 from calories alone to force a match.
@@ -496,7 +493,7 @@ Expected domain errors have stable codes and actionable details:
 Expose them consistently through MCP tool-error responses; no partial writes.
 Normal validation retains field locations. Error details must omit credentials.
 
-Implementation acceptance criteria after design review:
+Contract acceptance criteria:
 
 - MCP guidance and examples use inventory references for ordinary home-cooked
   ingredients; inline exceptions explain the uncertainty or unusual composition.
@@ -530,7 +527,5 @@ Implementation acceptance criteria after design review:
 - USDA failures leave catalog/logging functional and permit an explicitly
   recorded fallback; source evidence survives import and subsequent logging.
 
-Recommended sequence: catalog, USDA retrieval/provenance, and portion resolution;
-mixed entry support; then history discovery and audited linking. USDA-first
-creation is part of the initial feature, with a documented fallback when the
-provider is unavailable.
+Richer identity classification, grouped discovery, and server-calculated recipes
+are deferred features; they are not part of the matching contract above.

@@ -263,7 +263,7 @@ def test_links_preserve_entire_history_and_accounting(repository, meal, clock):
     assert repository.summarize(SummarizeInput(window=window)) == before_summary
     clock.value += timedelta(days=2)
     assert repository.inventory.apply_food_links(plan["plan_id"], "Retry") == result
-    with repository._connect() as connection:
+    with repository.database.connection() as connection:
         audit = connection.execute(
             "SELECT * FROM entry_revisions WHERE entry_id=?", (entry["entry_id"],)
         ).fetchone()
@@ -335,7 +335,7 @@ def test_usda_nutrient_mapping(data_type):
 
 def test_usda_receipts_direct_import_unique_id_and_snapshot(repository, usda_database):
     usda_database([usda_raw()])
-    client = USDAClient(repository)
+    client = USDAClient(repository.database)
     search = client.search("test")
     assert client.search("test")["lookup_id"] == search["lookup_id"]
     snapshot = client.get_food(123)
@@ -376,7 +376,7 @@ def test_estimates_require_real_fallback_evidence(repository, monkeypatch):
     with pytest.raises(ValueError, match="receipts"):
         repository.inventory.create_food(FoodDefinition.model_validate(payload))
 
-    receipt = USDAClient(repository).search("bakery")
+    receipt = USDAClient(repository.database).search("bakery")
     assert receipt["outcome"] == "unavailable"
     payload["usda_lookup"].update(outcome="unavailable", lookup_ids=[receipt["lookup_id"]])
     assert (
@@ -486,7 +486,7 @@ def test_inventory_mcp_create_log_conflict_and_link(repository, meal):
 
 def test_direct_usda_cannot_be_hidden_in_mixed_source(repository, usda_database):
     usda_database([usda_raw()])
-    snapshot = USDAClient(repository).get_food(123)
+    snapshot = USDAClient(repository.database).get_food(123)
     source = {
         "type": "database",
         "detail": "Direct USDA",
@@ -511,8 +511,8 @@ def test_direct_usda_cannot_be_hidden_in_mixed_source(repository, usda_database)
 
 def test_two_proxy_estimates_reference_one_usda_identity(repository, usda_database):
     usda_database([usda_raw()])
-    receipt = USDAClient(repository).search("bakery")
-    snapshot = USDAClient(repository).get_food(123)
+    receipt = USDAClient(repository.database).search("bakery")
+    snapshot = USDAClient(repository.database).get_food(123)
     canonical = make_food(
         repository,
         usda_fdc_id=123,
@@ -555,7 +555,7 @@ def test_two_proxy_estimates_reference_one_usda_identity(repository, usda_databa
 def test_migration_leaves_existing_history_unlinked(tmp_path, meal):
     import sqlite3
 
-    from mcp_nutrition_db.repository import MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4
+    from mcp_nutrition_db.migrations import MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4
 
     database = tmp_path / "v4.sqlite3"
     with sqlite3.connect(database) as connection:

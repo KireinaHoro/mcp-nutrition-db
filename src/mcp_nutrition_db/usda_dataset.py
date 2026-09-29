@@ -14,8 +14,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from .inventory import _json
-from .usda import normalize_food
+from .serialization import canonical_json as _json
+from .usda_normalization import normalize_food
 
 FORMAT_VERSION = 1
 NORMALIZATION_VERSION = 1

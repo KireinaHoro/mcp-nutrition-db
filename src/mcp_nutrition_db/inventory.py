@@ -9,8 +9,11 @@ import sqlite3
 import unicodedata
 from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from .database import Database
+from .entries import component_from_row, load_entry
+from .errors import InventoryError
 from .inventory_models import FixedServing, FoodDefinition, FoodLink, SourceEvidence
 from .models import (
     Estimation,
@@ -21,32 +24,16 @@ from .models import (
     ServingAmount,
     resolve_window,
 )
-from .repository import (
-    NUTRIENTS,
-    RepositoryError,
-    _new_id,
-    _nutrient_db_values,
-    _parse_timestamp,
-    _timestamp,
-)
-
-if TYPE_CHECKING:
-    from .repository import NutritionRepository
-
-
-class InventoryError(RepositoryError):
-    def __init__(self, code: str, **details: Any) -> None:
-        self.code = code
-        self.details = details
-        super().__init__(json.dumps({"code": code, **details}, ensure_ascii=False))
+from .nutrients import NUTRIENTS
+from .nutrients import nutrient_db_values as _nutrient_db_values
+from .serialization import canonical_json as _json
+from .serialization import new_id as _new_id
+from .serialization import parse_timestamp as _parse_timestamp
+from .serialization import timestamp as _timestamp
 
 
 def normalize_name(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def _cursor(filters: Any, position: str) -> str:
@@ -70,8 +57,8 @@ def _position(cursor: str | None, filters: Any) -> str:
 
 
 class InventoryRepository:
-    def __init__(self, repository: NutritionRepository) -> None:
-        self.repo = repository
+    def __init__(self, database: Database) -> None:
+        self.database = database
 
     @staticmethod
     def _keys(food: FoodDefinition) -> list[tuple[str, str]]:
@@ -143,13 +130,13 @@ class InventoryRepository:
         }
 
     def get_food(self, food_id: str, revision: int | None = None) -> dict[str, Any]:
-        with self.repo._connect() as connection:
+        with self.database.connection() as connection:
             if revision is None:
                 revision = self._food(connection, food_id)["revision"]
             return self._food(connection, food_id, revision)
 
     def status(self) -> dict[str, Any]:
-        with self.repo._connect() as connection:
+        with self.database.connection() as connection:
             entries = connection.execute(
                 "SELECT COUNT(*) AS entries, MIN(occurred_at_utc) AS first_occurred_at, "
                 "MAX(occurred_at_utc) AS last_occurred_at FROM entries WHERE deleted_at IS NULL"
@@ -165,7 +152,7 @@ class InventoryRepository:
             return {
                 "history": {**dict(entries), **dict(components)},
                 "foods": {row["status"]: row["count"] for row in foods},
-                "schema_version": self.repo.schema_version(),
+                "schema_version": self.database.schema_version(),
             }
 
     def _validate_source(
@@ -199,7 +186,7 @@ class InventoryRepository:
                 evidence[str(index)] = proxy
             if source.historical_reference:
                 ref_history = source.historical_reference
-                entry = self.repo._get_entry(connection, ref_history.entry_id, include_deleted=True)
+                entry = load_entry(connection, ref_history.entry_id, include_deleted=True)
                 if entry["revision"] != ref_history.entry_revision:
                     row = connection.execute(
                         "SELECT snapshot_json FROM entry_revisions "
@@ -249,7 +236,7 @@ class InventoryRepository:
         reason: str,
     ) -> dict[str, Any]:
         evidence = self._validate_source(connection, food)
-        now = _timestamp(self.repo.clock())
+        now = _timestamp(self.database.clock())
         if revision == 1:
             connection.execute(
                 "INSERT INTO foods VALUES (?, ?, ?, ?, ?, ?)",
@@ -275,8 +262,7 @@ class InventoryRepository:
         return result
 
     def create_food(self, food: FoodDefinition) -> dict[str, Any]:
-        with self.repo._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self.database.connection(write=True) as connection:
             return self._write_food(connection, _new_id(), food, 1, "active", "Created food")
 
     def update_food(
@@ -284,8 +270,7 @@ class InventoryRepository:
     ) -> dict[str, Any]:
         if not changes:
             raise ValueError("at least one changed field is required")
-        with self.repo._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self.database.connection(write=True) as connection:
             current = self._food(connection, food_id)
             if current["revision"] != expected_revision:
                 raise InventoryError(
@@ -316,7 +301,7 @@ class InventoryRepository:
         after = _position(cursor, filters)
         if status not in ("active", "archived", "all") or not 1 <= limit <= 100:
             raise ValueError("invalid search status or limit")
-        with self.repo._connect() as connection:
+        with self.database.connection() as connection:
             params: list[Any] = [after]
             clauses = ["f.food_id > ?"]
             if status != "all":
@@ -347,7 +332,7 @@ class InventoryRepository:
                 else None,
             }
 
-    def _resolve(
+    def resolve_in_transaction(
         self,
         connection: sqlite3.Connection,
         food_id: str,
@@ -436,8 +421,10 @@ class InventoryRepository:
         amount: FoodAmount,
         portion_estimation: Estimation | None = None,
     ) -> dict[str, Any]:
-        with self.repo._connect() as connection:
-            return self._resolve(connection, food_id, food_revision, amount, portion_estimation)
+        with self.database.connection() as connection:
+            return self.resolve_in_transaction(
+                connection, food_id, food_revision, amount, portion_estimation
+            )
 
     def find_food_matches(
         self,
@@ -448,12 +435,12 @@ class InventoryRepository:
         limit: int = 50,
         unlinked_only: bool = True,
     ) -> dict[str, Any]:
-        resolved = resolve_window(window, now=self.repo.clock())
+        resolved = resolve_window(window, now=self.database.clock())
         filters = [resolved.model_dump(mode="json"), food_id, query, unlinked_only]
         after = _position(cursor, filters)
         if not 1 <= limit <= 100:
             raise ValueError("invalid limit")
-        with self.repo._connect() as connection:
+        with self.database.connection() as connection:
             rows = connection.execute(
                 "SELECT c.*, e.revision AS entry_revision, e.occurred_at, e.title "
                 "FROM entry_components c JOIN entries e USING(entry_id) "
@@ -468,7 +455,7 @@ class InventoryRepository:
                 rows = [r for r in rows if all(t in normalize_name(r["name"]) for t in tokens)]
             matches = []
             for row in rows[:limit]:
-                component = self.repo._component_from_row(row)
+                component = component_from_row(row)
                 if food_id:
                     candidates = [self._food(connection, food_id)]
                 else:
@@ -512,12 +499,11 @@ class InventoryRepository:
         targets = [link.component_id for link in links]
         if len(set(targets)) != len(targets):
             raise InventoryError("invalid_link_target", detail="duplicate target")
-        with self.repo._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self.database.connection(write=True) as connection:
             results = []
             entries = {}
             for link in links:
-                entry = self.repo._get_entry(connection, link.entry_id)
+                entry = load_entry(connection, link.entry_id)
                 if entry["revision"] != link.expected_entry_revision:
                     raise InventoryError(
                         "revision_conflict",
@@ -533,7 +519,7 @@ class InventoryRepository:
                 resolved = (
                     None
                     if link.amount is None
-                    else self._resolve(
+                    else self.resolve_in_transaction(
                         connection,
                         link.food_id,
                         link.food_revision,
@@ -579,7 +565,7 @@ class InventoryRepository:
                     }
                 )
             plan_id = _new_id()
-            expires_at = _timestamp(self.repo.clock() + timedelta(hours=24))
+            expires_at = _timestamp(self.database.clock() + timedelta(hours=24))
             plan = {
                 "plan_id": plan_id,
                 "expires_at": expires_at,
@@ -595,8 +581,7 @@ class InventoryRepository:
             return plan
 
     def apply_food_links(self, plan_id: str, reason: str) -> dict[str, Any]:
-        with self.repo._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self.database.connection(write=True) as connection:
             row = connection.execute(
                 "SELECT * FROM food_link_plans WHERE plan_id=?", (plan_id,)
             ).fetchone()
@@ -605,12 +590,12 @@ class InventoryRepository:
             if row["result_json"] is not None:
                 result: dict[str, Any] = json.loads(row["result_json"])
                 return result
-            if _parse_timestamp(row["expires_at"]) <= self.repo.clock():
+            if _parse_timestamp(row["expires_at"]) <= self.database.clock():
                 raise InventoryError("plan_expired", plan_id=plan_id)
             plan = json.loads(row["plan_json"])
             before_entries = {}
             for entry_id, revision in plan["entry_revisions"].items():
-                entry = self.repo._get_entry(connection, entry_id)
+                entry = load_entry(connection, entry_id)
                 if entry["revision"] != revision:
                     raise InventoryError(
                         "plan_conflict", entry_id=entry_id, current_revision=entry["revision"]
@@ -631,7 +616,7 @@ class InventoryRepository:
                 )
                 if result_cursor.rowcount != 1:
                     raise InventoryError("plan_conflict", component_id=link["component_id"])
-            now = _timestamp(self.repo.clock())
+            now = _timestamp(self.database.clock())
             affected = []
             for entry_id, entry in before_entries.items():
                 revision = entry["revision"] + 1
@@ -643,7 +628,7 @@ class InventoryRepository:
                     "UPDATE entries SET revision=?, updated_at=? WHERE entry_id=?",
                     (revision, now, entry_id),
                 )
-                after = self.repo._get_entry(connection, entry_id)
+                after = load_entry(connection, entry_id)
                 if (
                     after["totals"] != entry["totals"]
                     or after["completeness"] != entry["completeness"]
