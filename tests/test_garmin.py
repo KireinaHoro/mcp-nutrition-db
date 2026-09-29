@@ -109,7 +109,7 @@ def test_dry_run_and_unverified_calories(importer, repository):
     assert facts["confidence"] == "medium"
     assert facts["active_mkcal"] == 600000
     facts = normalize("activity", ACTIVITY, {**VALIDATION, "power_meter_device_ids": ["42"]})
-    assert facts["confidence"] == "high"
+    assert facts["confidence"] == "medium"
     raw = {**ACTIVITY, "movingDuration": 0, "duration": 30}
     assert normalize("activity", raw, VALIDATION)["duration_ms"] == 30000
 
@@ -325,3 +325,69 @@ def test_reconciliation_does_not_fetch_unreviewed_older_activity_history(
     assert len(tables(repository, ["trainings"])["trainings"]) == 1
     ranges = importer.ranges("activity")
     assert min(start for start, end in ranges) == date(2026, 8, 25)
+
+
+@pytest.mark.parametrize("kind", ["cycling", "road_biking", "indoor_cycling"])
+def test_physical_sensor_confidence_and_audited_evidence(importer, repository, tmp_path, kind):
+    importer.validate({**VALIDATION, "bike_power_sensor_metadata": True})
+    raw = {
+        **ACTIVITY,
+        "activityType": {"typeKey": kind},
+        "sensors": [
+            {
+                "manufacturer": "Synthetic meter",
+                "sourceType": "ANTPLUS",
+                "antplusDeviceType": "BIKE_POWER",
+            }
+        ],
+    }
+    importer.provider.activity_records = [raw]
+    sync(importer)
+    result = approve_all(importer, tmp_path)
+    training = result["changes"][0]
+    assert training["confidence"] == "high"
+    assert training["credited_burn_kcal"] == 600
+    assert training["measurement_method"] == "power_meter"
+    assert "BIKE_POWER" in training["evidence"]["detail"]
+    for sensors in ([], None, [{"antplusDeviceType": "HEART_RATE", "sourceType": "ANTPLUS"}]):
+        assert (
+            normalize("activity", {**raw, "sensors": sensors}, importer.validation())["confidence"]
+            == "medium"
+        )
+    assert normalize("activity", raw, VALIDATION)["confidence"] == "medium"
+    assert (
+        normalize(
+            "activity", {**raw, "activityType": {"typeKey": "running"}}, importer.validation()
+        )["confidence"]
+        == "medium"
+    )
+
+
+def test_adapter_retains_sensor_provenance_without_serial_numbers():
+    class API:
+        garmin_connect_activities = "/synthetic"
+
+        def connectapi(self, path, params):
+            return [ACTIVITY] if params["start"] == 0 else []
+
+        def get_activity(self, identity):
+            return {
+                "activityId": 101,
+                "metadataDTO": {
+                    "sensors": [
+                        {
+                            "manufacturer": "Synthetic",
+                            "sourceType": "ANTPLUS",
+                            "antplusDeviceType": "BIKE_POWER",
+                            "serialNumber": 12345,
+                        }
+                    ],
+                    "childIds": [102],
+                },
+                "isMultiSportParent": True,
+            }
+
+    row = GarminAdapter(API(), "123").activities(date(2026, 8, 26), date(2026, 8, 26))[0]
+    assert "serialNumber" not in row["sensors"][0]
+    assert row["isParent"] and row["childIds"] == [102]
+    assert "multisport_selection_required" in normalize("activity", row, VALIDATION)["issues"]

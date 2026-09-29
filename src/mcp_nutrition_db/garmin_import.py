@@ -331,6 +331,7 @@ class GarminImporter:
                         "activity": facts["activity"],
                         "confidence": facts["confidence"],
                         "measurement_method": facts["measurement_method"],
+                        "evidence": facts.get("evidence"),
                         "source": {
                             "type": "wearable",
                             "detail": "Garmin Connect recorded activity",

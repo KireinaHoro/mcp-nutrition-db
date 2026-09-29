@@ -128,3 +128,50 @@ def test_resume_through_systemd_state_parent(tmp_path, monkeypatch):
         garmin_auth.resume(state, {"account_id": "123"})
     assert json.loads(token.read_text()) == {"di_token": "synthetic-rotated"}
     assert token.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("fail_after_refresh", [False, True])
+def test_sync_persists_tokens_refreshed_during_fetch(tmp_path, monkeypatch, fail_after_refresh):
+    from types import SimpleNamespace
+    from mcp_nutrition_db import garmin_cli
+
+    class API:
+        token = "before-fetch"
+
+        @property
+        def client(self):
+            return self
+
+        def dumps(self):
+            return json.dumps({"di_token": self.token})
+
+    api = API()
+    secret = tmp_path / "seed.json"
+    secret.write_text(json.dumps(bundle()))
+    state = tmp_path / "runtime"
+    monkeypatch.setattr(garmin_cli, "resume", lambda state, metadata: api)
+
+    def fetch(self, **kwargs):
+        api.token = "after-refresh"
+        if fail_after_refresh:
+            raise ValueError("synthetic fetch failure")
+        return {}
+
+    monkeypatch.setattr(garmin_cli.GarminImporter, "sync", fetch)
+    args = SimpleNamespace(
+        garmin_command="sync",
+        database=str(tmp_path / "db.sqlite3"),
+        state_directory=state,
+        credentials_file=secret,
+        start=None,
+        end=None,
+        dry_run=False,
+        weekly=False,
+        output=None,
+    )
+    if fail_after_refresh:
+        with pytest.raises(ValueError, match="synthetic fetch failure"):
+            garmin_cli.run(args)
+    else:
+        assert garmin_cli.run(args) == 0
+    assert json.loads((state / "tokens.json").read_text())["di_token"] == "after-refresh"

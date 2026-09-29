@@ -34,6 +34,7 @@ ACTIVITY_FIELDS = (
     "childIds",
     "isParent",
     "deviceId",
+    "sensors",
     "averageHR",
     "distance",
 )
@@ -89,6 +90,23 @@ class GarminAdapter:
                     **detail.get("summaryDTO", {}),
                     **{k: v for k, v in detail.items() if k != "summaryDTO"},
                 }
+                metadata = detail.get("metadataDTO") or {}
+                sensors = metadata.get("sensors")
+                if isinstance(sensors, list):
+                    merged["sensors"] = [
+                        {
+                            k: sensor[k]
+                            for k in ("manufacturer", "sourceType", "antplusDeviceType")
+                            if k in sensor
+                        }
+                        for sensor in sensors
+                        if isinstance(sensor, dict)
+                    ]
+                merged["isParent"] = bool(
+                    merged.get("isParent") or detail.get("isMultiSportParent")
+                )
+                if metadata.get("childIds"):
+                    merged["childIds"] = metadata["childIds"]
                 records.append({k: merged[k] for k in ACTIVITY_FIELDS if k in merged})
         raise ValueError("activity pagination limit exceeded")
 
@@ -190,8 +208,37 @@ def normalize(stream: str, raw: dict[str, Any], validation: dict[str, Any]) -> d
             ):
                 issues.append("multisport_selection_required")
             facts["activity"] = str(raw.get("activityName") or activity_type)[:200]
-            confirmed = str(raw.get("deviceId")) in validation.get("power_meter_device_ids", [])
-            power = confirmed and "cycling" in activity_type
+            sensors = raw.get("sensors")
+            power_sensors = (
+                [
+                    sensor
+                    for sensor in sensors
+                    if isinstance(sensor, dict)
+                    and sensor.get("sourceType") == "ANTPLUS"
+                    and sensor.get("antplusDeviceType") == "BIKE_POWER"
+                ]
+                if isinstance(sensors, list)
+                else []
+            )
+            cycling = activity_type in {
+                "cycling",
+                "road_biking",
+                "indoor_cycling",
+                "mountain_biking",
+                "gravel_cycling",
+                "cyclocross",
+                "track_cycling",
+                "recumbent_cycling",
+            }
+            power = bool(validation.get("bike_power_sensor_metadata") and power_sensors and cycling)
+            if power:
+                facts["evidence"] = {
+                    "device": ", ".join(
+                        str(sensor.get("manufacturer") or "Unknown manufacturer")
+                        for sensor in power_sensors
+                    ),
+                    "detail": "Garmin activity metadata records an ANTPLUS BIKE_POWER sensor.",
+                }
             facts["confidence"] = "high" if power else "medium"
             facts["measurement_method"] = (
                 "power_meter"

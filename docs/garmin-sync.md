@@ -69,7 +69,11 @@ terminal is needed for interactive validation on production.
    cycling and walking/running workout displays. Verify permanent IDs, grams,
    UTC milliseconds for weights, UTC activity starts, duration seconds, and active
    calories. `validate` records explicit operator confirmations. Never confirm an
-   unknown field. Power values alone do not establish a physical power meter.
+   unknown field. For cycling confidence, validate the activity metadata's ANTPLUS
+   `BIKE_POWER` sensor classification. Each new activity must contain that sensor
+   evidence to receive high confidence; a recorder ID or power values alone are
+   insufficient. The import retains sensor manufacturer/type provenance, excluding
+   serial numbers, and preserves confidence/evidence on existing linked workouts.
 3. `sync` imports validated weights and stages historical activities. The initial
    weight window is 90 days. Activity backfill starts one day before the earliest
    local training, including deleted trainings, and covers through today. Each

@@ -82,6 +82,7 @@ def run(args: argparse.Namespace) -> int:
         importer = GarminImporter(repository, GarminAdapter(None, metadata["account_id"]))
         if not getattr(args, "dry_run", False):
             importer.register()
+        api = None
         try:
             if args.garmin_command in ("sync", "validate") or (
                 args.garmin_command == "reconcile" and args.apply_plan
@@ -163,14 +164,15 @@ def run(args: argparse.Namespace) -> int:
                 }
                 for key, question in questions.items():
                     validation[key] = input(question + " [yes/no] ").strip().lower() == "yes"
-                # Physical power-meter provenance is deliberately never inferred from power numbers.
-                devices = input(
-                    "Verified physical power-meter cycling device IDs, comma-separated; blank "
-                    "for none: "
+                validation["bike_power_sensor_metadata"] = (
+                    input(
+                        "Does activity metadata identify a physical power meter as an ANTPLUS "
+                        "BIKE_POWER sensor on representative cycling recordings? [yes/no] "
+                    )
+                    .strip()
+                    .lower()
+                    == "yes"
                 )
-                validation["power_meter_device_ids"] = [
-                    d.strip() for d in devices.split(",") if d.strip()
-                ]
                 types = input(
                     "Verified HR/GPS model activity types (comma-separated; blank for none): "
                 )
@@ -229,4 +231,8 @@ def run(args: argparse.Namespace) -> int:
                         (current.get("auth_state", "ready"), failure, metadata["account_id"]),
                     )
             raise
+        finally:
+            if api is not None:
+                # Requests can refresh tokens after the initial session resume.
+                private_write(state / "tokens.json", api.client.dumps())
     return 0
