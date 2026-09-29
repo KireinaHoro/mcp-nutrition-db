@@ -36,6 +36,15 @@ ACTIVITY_FIELDS = (
     "deviceId",
     "sensors",
     "averageHR",
+    "maxHR",
+    "averagePower",
+    "maxPower",
+    "normalizedPower",
+    "averageBikeCadence",
+    "elevationGain",
+    "elevationLoss",
+    "averageSpeed",
+    "maxSpeed",
     "distance",
 )
 

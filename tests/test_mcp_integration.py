@@ -45,6 +45,9 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
 
             tools = await session.list_tools()
             assert len(tools.tools) == 35
+            descriptions = {tool.name: tool.description for tool in tools.tools}
+            assert "ACTIVE" in descriptions["nutrition_get_training"]
+            assert "garmin_activity" in descriptions["nutrition_list_trainings"]
 
             status = await session.call_tool("nutrition_get_sync_status", {})
             assert status.isError is False
@@ -166,6 +169,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             )
             assert training.isError is False
             assert training.structuredContent is not None
+            assert training.structuredContent["calorie_basis"] == "active"
             assert training.structuredContent["reported_burn_kcal"] == 850
             assert training.structuredContent["credited_burn_kcal"] == 850
 
@@ -223,6 +227,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert summary.isError is False
             assert summary.structuredContent is not None
             group = summary.structuredContent["groups"][0]
+            assert group["trainings"][0]["calorie_basis"] == "active"
             assert group["reported_training_burn_kcal"] == 850
             assert group["credited_training_burn_kcal"] == 850
             assert group["energy_balance"]["available_ceiling_kcal"] == 2650

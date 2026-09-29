@@ -391,3 +391,145 @@ def test_adapter_retains_sensor_provenance_without_serial_numbers():
     assert "serialNumber" not in row["sensors"][0]
     assert row["isParent"] and row["childIds"] == [102]
     assert "multisport_selection_required" in normalize("activity", row, VALIDATION)["issues"]
+
+
+def test_garmin_details_enrich_existing_trainings_without_accounting_changes(
+    importer, repository, tmp_path
+):
+    from mcp_nutrition_db.models import CalendarDayWindow, ListTrainingsInput, SummarizeInput
+
+    # A record imported before the richer fields were available.
+    sync(importer)
+    result = approve_all(importer, tmp_path)
+    identity = result["changes"][0]["training_id"]
+    repository.update_training(
+        identity,
+        1,
+        "Local evidence",
+        TrainingChanges.model_validate(
+            {"notes": "Keep my note", "evidence": {"detail": "Keep my evidence"}}
+        ),
+    )
+    before = tables(
+        repository, ["trainings", "training_revisions", "daily_goals", "goal_revisions"]
+    )
+    importer.provider.activity_records[0].update(
+        distance=42000,
+        averageHR=148,
+        maxHR=175,
+        averagePower=180,
+        maxPower=510,
+        normalizedPower=195,
+        elevationGain=320,
+        averageBikeCadence=84,
+        averageSpeed=11.2,
+    )
+    sync(importer)
+    sync(importer)
+    window = CalendarDayWindow(
+        type="calendar_day", date=date(2026, 8, 26), timezone="Europe/Zurich"
+    )
+    results = [
+        repository.get_training(identity),
+        repository.list_trainings(ListTrainingsInput(window=window))["trainings"][0],
+        repository.summarize(SummarizeInput(window=window))["groups"][0]["trainings"][0],
+    ]
+    for training in results:
+        details = training["garmin_activity"]
+        assert details["metrics"]["distance_m"] == 42000
+        assert details["metrics"]["average_hr_bpm"] == 148
+        assert details["metrics"]["average_power_w"] == 180
+        assert details["metrics"]["normalized_power_w"] == 195
+        assert details["metrics"]["elevation_gain_m"] == 320
+        assert details["metrics"]["moving_duration_seconds"] == 3600
+        assert details["energy"]["active_kcal"] == training["reported_burn_kcal"] == 600
+        assert details["energy"]["total_kcal"] == 700
+        assert details["energy"]["resting_kcal"] == 100
+        assert details["energy"]["mapping"] == "total_minus_resting"
+        assert training["calorie_basis"] == "active"
+        assert training["credited_burn_kcal"] == 480
+        assert training["notes"] == "Keep my note"
+        assert training["evidence"]["detail"] == "Keep my evidence"
+        assert training["confidence"] == "medium"  # Wattage alone is not a physical sensor.
+    assert tables(repository, before) == before
+
+    repository.update_training(
+        identity, 2, "Override active burn", TrainingChanges(reported_burn_kcal=550)
+    )
+    importer.provider.activity_records[0]["calories"] = 800
+    sync(importer)
+    training = repository.get_training(identity)
+    assert training["reported_burn_kcal"] == 550
+    assert training["garmin_activity"]["energy"]["active_kcal"] == 700
+    assert training["garmin_activity"]["sync_status"] == "local_override_conflict"
+
+    # The MCP response must expose the same provenance, not only internal reads.
+    import asyncio
+
+    import httpx
+
+    from mcp_nutrition_db.server import create_server
+
+    app = create_server(repository).streamable_http_app()
+
+    async def fetch_tool():
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8787"
+            ) as client,
+        ):
+            response = await client.post(
+                "/mcp",
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                },
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "nutrition_get_training",
+                        "arguments": {"training_id": identity},
+                    },
+                },
+            )
+            assert response.status_code == 200
+            data = response.json()["result"]["structuredContent"]
+            assert data["garmin_activity"]["metrics"]["average_power_w"] == 180
+            assert data["calorie_basis"] == "active"
+
+    asyncio.run(fetch_tool())
+
+
+def test_optional_garmin_metrics_are_filtered_and_adapter_retains_details():
+    from mcp_nutrition_db.training_details import number
+
+    for invalid in (None, True, -1, float("nan"), float("inf"), "not numeric", {}):
+        assert number(invalid) is None
+    assert number(0) == 0
+
+    class API:
+        garmin_connect_activities = "/synthetic"
+
+        def connectapi(self, path, params):
+            return [ACTIVITY] if params["start"] == 0 else []
+
+        def get_activity(self, identity):
+            return {
+                "activityId": 101,
+                "summaryDTO": {
+                    "distance": 42000,
+                    "averageHR": 148,
+                    "averagePower": 180,
+                    "normalizedPower": 195,
+                    "elevationGain": 320,
+                    "startLatitude": 42,
+                },
+            }
+
+    raw = GarminAdapter(API(), "123").activities(date(2026, 8, 26), date(2026, 8, 26))[0]
+    assert raw["averagePower"] == 180 and raw["distance"] == 42000
+    assert raw["normalizedPower"] == 195
+    assert "startLatitude" not in raw
+    assert normalize("activity", raw, VALIDATION)["raw"]["averagePower"] == 180

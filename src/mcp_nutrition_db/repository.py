@@ -48,6 +48,7 @@ from .nutrients import unscale as _unscale
 from .serialization import create_digest, utc_now
 from .serialization import new_id as _new_id
 from .serialization import timestamp as _timestamp
+from .training_details import add_garmin_details
 
 CREATE_RETRY_WINDOW = timedelta(minutes=10)
 ENERGY_POLICY_ID = POLICY_ID
@@ -324,6 +325,7 @@ class NutritionRepository:
             "activity": row["activity"],
             "duration_minutes": _unscale(row["duration_milliseconds"], 60_000),
             "reported_burn_kcal": _unscale(reported_burn_mkcal, 1_000),
+            "calorie_basis": "active",
             "credited_burn_kcal": _unscale(credited_burn_mkcal, 1_000),
             "confidence": row["confidence"],
             "confidence_multiplier": multiplier / 1_000,
@@ -418,7 +420,9 @@ class NutritionRepository:
 
     def get_training(self, training_id: str) -> dict[str, Any]:
         with self.database.connection() as connection:
-            return self._get_training(connection, training_id)
+            training = self._get_training(connection, training_id)
+            add_garmin_details(connection, [training])
+            return training
 
     def update_training(
         self,
@@ -569,13 +573,15 @@ class NutritionRepository:
         )
         with self.database.connection() as connection:
             rows = connection.execute(sql, parameters).fetchall()
+            trainings = [self._training_from_row(row) for row in rows[: request.limit]]
+            add_garmin_details(connection, trainings)
         has_more = len(rows) > request.limit
         page = rows[: request.limit]
         next_cursor = None
         if has_more and page:
             next_cursor = self._encode_cursor(page[-1]["occurred_at_utc"], page[-1]["training_id"])
         return {
-            "trainings": [self._training_from_row(row) for row in page],
+            "trainings": trainings,
             "next_cursor": next_cursor,
             "resolved_window": resolved.model_dump(mode="json"),
         }
@@ -658,6 +664,7 @@ class NutritionRepository:
                 (_timestamp(resolved.start), _timestamp(resolved.end)),
             ).fetchall()
             trainings = [self._training_from_row(row) for row in training_rows]
+            add_garmin_details(connection, trainings)
 
         zone = ZoneInfo(resolved.timezone)
         groups: dict[str, list[dict[str, Any]]] = {}
@@ -779,6 +786,7 @@ class NutritionRepository:
                     "group": key,
                     "entry_count": len(group_entries),
                     "training_count": len(group_trainings),
+                    "trainings": group_trainings,
                     "reported_training_burn_kcal": reported_training_burn,
                     "credited_training_burn_kcal": credited_training_burn,
                     "totals": values,

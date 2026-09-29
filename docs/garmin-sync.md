@@ -167,3 +167,21 @@ figures; committed fixtures are synthetic.
 Live acceptance still requires login/session validation, verified field mappings,
 approved historical reconciliation, latest-weight comparison, a repeated sync
 without duplicates, timer execution and unchanged saved calorie/deficit goals.
+
+## Activity details in conversations
+
+Training reads, lists, and nutrition summaries expose a `garmin_activity` section
+for linked workouts. It contains available distance (meters), average/maximum
+heart rate (bpm), average/maximum/normalized power (watts), cycling cadence (rpm),
+elevation gain/loss (meters), speed (m/s), and moving/timer duration (seconds).
+Missing or invalid optional metrics are omitted. Sensor evidence, local notes,
+and manually maintained evidence remain separate from these source measurements.
+A sync refreshes these details for existing imports without revising training
+records merely to add metadata.
+
+`reported_burn_kcal` is **per-activity active energy**, excluding resting energy.
+`credited_burn_kcal` applies the training confidence multiplier once. The Garmin
+section includes the verified active-calorie mapping and available total/resting
+components; total calories are never substituted for active calories. Its
+`sync_status` identifies pending source changes or local override conflicts:
+latest Garmin measurements can then differ from the training used in accounting.

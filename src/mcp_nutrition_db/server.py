@@ -210,7 +210,8 @@ def create_server(
     @server.tool(
         name="nutrition_log_training",
         description=(
-            "Log one training session and its reported energy-burn estimate. Classify confidence "
+            "Log one training session and its reported ACTIVE energy-burn estimate, excluding "
+            "resting calories. Classify confidence "
             "and measurement method and include supporting evidence when available. The server "
             "preserves reported burn and calculates policy-adjusted credited burn. Exact retries "
             "within ten minutes return the original training."
@@ -250,7 +251,14 @@ def create_server(
 
     @server.tool(
         name="nutrition_get_training",
-        description="Fetch one complete active training by its training_id.",
+        description=(
+            "Fetch one complete active training by its training_id. Garmin-linked trainings "
+            "include garmin_activity with available distance, heart-rate, power and other "
+            "metrics with explicit units, plus the active/total/resting calorie breakdown. "
+            "reported_burn_kcal is ACTIVE calories, excluding resting calories; "
+            "credited_burn_kcal applies confidence once. Garmin details are latest source "
+            "measurements; check sync_status for pending changes and retain local overrides."
+        ),
         annotations=READ_ONLY,
     )
     def nutrition_get_training(
@@ -296,7 +304,9 @@ def create_server(
     @server.tool(
         name="nutrition_list_trainings",
         description=(
-            "List training sessions in a bounded window. For today, use "
+            "List training sessions with available Garmin distance, HR, power and other metrics "
+            "in garmin_activity. Reported burn is per-activity ACTIVE calories, excluding "
+            "resting calories; credited burn applies confidence once. For today, use "
             '{"type":"relative_day","day":"today"}; resolved boundaries are returned.'
         ),
         annotations=READ_ONLY,
@@ -317,8 +327,11 @@ def create_server(
     @server.tool(
         name="nutrition_summarize",
         description=(
-            "Sum nutrition over a bounded window, grouped by day or whole range. For today's "
-            "macros and energy balance, use a relative_day window. Energy results distinguish "
+            "Sum nutrition over a bounded window, grouped by day or whole range. Includes "
+            "training details and available Garmin metrics. Training burn uses ACTIVE "
+            "calories excluding resting calories, with confidence applied once to credit. "
+            "For today's macros and energy balance, use a relative_day window. Energy results "
+            "distinguish "
             "ordinary target, protected recovery, exercise allowance, and debit adjustment. "
             "Exceptional-day unused budget repays debit after reserving capped recovery; "
             "only additional restriction is paused. Read debit.repaid_kcal and unsettled_dates "
