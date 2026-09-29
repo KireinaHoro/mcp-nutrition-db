@@ -78,7 +78,9 @@ current audited facts. See the policy for all arithmetic and settlement rules.
 ## Persistence and compatibility
 
 The personal database uses SQLite with foreign keys, WAL, and a busy timeout.
-Each connection is explicitly closed on success and failure. Mutations acquire
+Each request connection is explicitly closed on success and failure. The CLI owns
+one idle connection for the server lifetime to keep WAL sidecars available to
+the read-only backup sandbox; it holds no transaction and closes on shutdown. Mutations acquire
 `BEGIN IMMEDIATE` and commit or roll back as a unit. File-backed databases are
 required. The application does not support `:memory:` connections.
 

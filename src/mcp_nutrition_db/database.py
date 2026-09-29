@@ -55,3 +55,16 @@ class Database:
         with self.connection() as connection:
             row = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
             return int(row[0] or 0)
+
+    @contextmanager
+    def keep_wal_available(self) -> Iterator[None]:
+        """Keep sidecars readable by the backup service for the server lifetime.
+
+        SQLite removes idle WAL sidecars when the final read/write connection
+        closes. The read-only backup sandbox cannot recreate them. This owned
+        connection keeps them present without holding a transaction or lock;
+        normal request connections still close immediately after use.
+        """
+        with self.connection() as connection:
+            connection.execute("SELECT version FROM schema_migrations LIMIT 1").fetchone()
+            yield

@@ -100,7 +100,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         default_timezone=args.timezone,
     )
     try:
-        server.run(transport=args.transport)
+        with repository.database.keep_wal_available():
+            server.run(transport=args.transport)
     except KeyboardInterrupt:
         # FastMCP completes its application shutdown before propagating Ctrl-C.
         # Treat that completed operator shutdown as a clean exit.

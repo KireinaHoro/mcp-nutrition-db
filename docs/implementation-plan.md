@@ -414,3 +414,16 @@ checks, and the full kage closure build pass. A private production snapshot
 retains all stored rows through repeat migration. Entries, trainings, food
 revisions, nutrient totals, and energy balances compare equal; only incomplete
 summary flags change as intended. Pre-deployment online backup succeeded.
+
+Deployment validation: application `70062aa`, deployment pin `b3c116d`, and
+workflow `36543826825` succeeded. Service health, all 28 MCP tools and input
+schemas, policy, inventory, goals, nutrient totals, and energy summaries passed
+live checks. Post-deployment backup failed because closing idle connections
+removed WAL sidecars that the read-only backup sandbox cannot recreate.
+The pre-deployment backup remains intact. A corrective change gives the CLI
+one explicitly owned connection for the server lifetime, preserving sidecars
+without holding a transaction. All 116 local tests, Ruff, formatting, and mypy
+pass, including backup of committed WAL data from a read-only directory and
+connection cleanup on shutdown. All x86_64-linux Nix flake checks also pass.
+Corrective activation and final backup/integrity
+validation remain pending; no second deployment has been initiated.
