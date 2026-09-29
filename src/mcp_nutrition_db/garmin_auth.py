@@ -142,10 +142,12 @@ def resume(state: Path, metadata: dict[str, Any]) -> Any:
         raise ValueError("token file must be private and not a symlink")
     try:
         api = client()
-        api.login(str(path))
+        # systemd DynamicUser state has a trusted symlink in its ancestry.
+        # Read the checked private file ourselves; the client rejects such paths.
+        api.login(path.read_text())
         if account_id(api) != metadata["account_id"]:
             raise ValueError("account mismatch")
-        api.client.dump(str(path))
+        private_write(path, api.client.dumps())
         return api
     except Exception as error:
         if "TooManyRequests" in type(error).__name__:

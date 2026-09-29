@@ -98,3 +98,33 @@ def test_reauth_stops_unattended_attempts(tmp_path, monkeypatch):
     monkeypatch.setattr(garmin_auth, "client", lambda: pytest.fail("must not retry auth"))
     with pytest.raises(ValueError, match="reauth_required"):
         garmin_auth.resume(state, metadata)
+
+
+def test_resume_through_systemd_state_parent(tmp_path, monkeypatch):
+    private = tmp_path / "private"
+    private.mkdir()
+    public = tmp_path / "service"
+    public.symlink_to(private, target_is_directory=True)
+    state = public / "garmin"
+    state.mkdir(mode=0o700)
+    token = state / "tokens.json"
+    garmin_auth.private_write(token, '{"di_token":"synthetic-old"}')
+
+    class API:
+        profile_id = 123
+
+        def login(self, value):
+            assert json.loads(value) == {"di_token": "synthetic-old"}
+
+        @property
+        def client(self):
+            return self
+
+        def dumps(self):
+            return '{"di_token":"synthetic-rotated"}'
+
+    monkeypatch.setattr(garmin_auth, "client", API)
+    with garmin_auth.session_lock(state):
+        garmin_auth.resume(state, {"account_id": "123"})
+    assert json.loads(token.read_text()) == {"di_token": "synthetic-rotated"}
+    assert token.stat().st_mode & 0o777 == 0o600
