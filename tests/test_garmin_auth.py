@@ -133,6 +133,7 @@ def test_resume_through_systemd_state_parent(tmp_path, monkeypatch):
 @pytest.mark.parametrize("fail_after_refresh", [False, True])
 def test_sync_persists_tokens_refreshed_during_fetch(tmp_path, monkeypatch, fail_after_refresh):
     from types import SimpleNamespace
+
     from mcp_nutrition_db import garmin_cli
 
     class API:
