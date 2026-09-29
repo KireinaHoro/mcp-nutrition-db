@@ -69,9 +69,7 @@ class GarminImporter:
             ).fetchall()
         earliest = today - timedelta(days=90)
         if stream == "activity" and first:
-            earliest = min(
-                earliest, parse_timestamp(first).astimezone(ZONE).date() - timedelta(days=1)
-            )
+            earliest = parse_timestamp(first).astimezone(ZONE).date() - timedelta(days=1)
         # Resume from first hole, not MAX(end_date), which would hide incomplete backfills.
         frontier = earliest
         for row in coverage:
@@ -80,7 +78,7 @@ class GarminImporter:
                 break
             if end >= frontier:
                 frontier = end + timedelta(days=1)
-        recent = today - timedelta(days=90 if weekly else 7)
+        recent = max(earliest, today - timedelta(days=90 if weekly else 7))
         intervals = [(recent, today)]
         if frontier < recent:
             intervals.append((frontier, recent - timedelta(days=1)))
@@ -423,6 +421,14 @@ class GarminImporter:
                     "SELECT * FROM body_measurements ORDER BY measurement_id"
                 )
             ],
+            "coverage": [
+                dict(r)
+                for r in connection.execute(
+                    "SELECT stream,start_date,end_date FROM sync_coverage WHERE account_id=? "
+                    "ORDER BY stream,start_date,end_date",
+                    (self.account_id,),
+                )
+            ],
             "validation": self.validation(),
         }
 
@@ -606,7 +612,8 @@ class GarminImporter:
                 raise ValueError("resolve or exclude all pending records before activation")
             plan = connection.execute(
                 "SELECT result_json FROM reconciliation_plans WHERE account_id=? "
-                "AND result_json IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+                "AND result_json IS NOT NULL ORDER BY json_extract(result_json, '$.applied_at') "
+                "DESC, rowid DESC LIMIT 1",
                 (self.account_id,),
             ).fetchone()
             if plan is None:
@@ -619,9 +626,7 @@ class GarminImporter:
             for stream in ("weight", "activity"):
                 frontier = today - timedelta(days=90)
                 if stream == "activity" and first:
-                    frontier = min(
-                        frontier, parse_timestamp(first).astimezone(ZONE).date() - timedelta(days=1)
-                    )
+                    frontier = parse_timestamp(first).astimezone(ZONE).date() - timedelta(days=1)
                 for coverage in connection.execute(
                     "SELECT start_date,end_date FROM sync_coverage WHERE account_id=? "
                     "AND stream=? ORDER BY start_date",

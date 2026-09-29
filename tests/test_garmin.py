@@ -309,3 +309,19 @@ def test_remote_change_invalidates_approved_plan_before_local_write(importer, re
     with pytest.raises(ValueError, match="remote source"):
         apply(importer, plan["plan_id"], approved=True, backup=tmp_path / "backup.sqlite3")
     assert tables(repository, before) == before
+
+
+def test_reconciliation_does_not_fetch_unreviewed_older_activity_history(
+    importer, repository, tmp_path
+):
+    sync(importer)
+    report = importer.report()
+    report["activities"][0]["action"] = "add"
+    plan = prepare(importer, report)
+    importer.provider.activity_records.append(
+        {**ACTIVITY, "activityId": 900, "startTimeGMT": "2026-07-01 08:00:00"}
+    )
+    apply(importer, plan["plan_id"], approved=True, backup=tmp_path / "backup.sqlite3")
+    assert len(tables(repository, ["trainings"])["trainings"]) == 1
+    ranges = importer.ranges("activity")
+    assert min(start for start, end in ranges) == date(2026, 8, 25)

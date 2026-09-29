@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -101,20 +101,16 @@ def prepare(importer: GarminImporter, decisions: dict[str, Any]) -> dict[str, An
 
 def verify_source_snapshot(importer: GarminImporter, snapshot: dict[str, Any]) -> None:
     """Re-read remote facts before applying an approval; never trust only cached hashes."""
-    today = importer.database.clock().astimezone(ZONE).date()
     for stream, key in (("activity", "sources"), ("weight", "weights")):
         originals = {r["external_id"]: r for r in snapshot[key]}
         time_key = "occurred_at" if stream == "activity" else "measured_at"
-        dates = [
-            parse_timestamp(json.loads(r["facts_json"])[time_key]).astimezone(ZONE).date()
-            for r in originals.values()
-            if json.loads(r["facts_json"]).get(time_key)
-        ]
-        lower = min([today - timedelta(days=90), *dates])
         current: dict[str, Any] = {}
         fetch = importer.provider.activities if stream == "activity" else importer.provider.weights
-        while lower <= today:
-            upper = min(lower + timedelta(days=6), today)
+        for coverage in snapshot["coverage"]:
+            if coverage["stream"] != stream:
+                continue
+            lower = date.fromisoformat(coverage["start_date"])
+            upper = date.fromisoformat(coverage["end_date"])
             for raw in fetch(lower - timedelta(days=1), upper + timedelta(days=1)):
                 facts = normalize(stream, raw, snapshot["validation"])
                 if facts.get(time_key) and not (
@@ -122,7 +118,6 @@ def verify_source_snapshot(importer: GarminImporter, snapshot: dict[str, Any]) -
                 ):
                     continue
                 current[facts["external_id"]] = canonical_json(facts)
-            lower = upper + timedelta(days=1)
         expected = {
             identity: r["facts_json"]
             for identity, r in originals.items()
