@@ -401,7 +401,8 @@ CI `35995127010` passed. No historical composition was automatically refreshed.
 - [x] Keep one packaged policy specification and reconcile current API/design docs.
 - [x] Add Ruff formatting/lint and mypy to flake checks used by CI.
 - [x] Complete local regression, package, NixOS, and live-snapshot compatibility checks.
-- [ ] Deploy once and validate service health, database integrity, and live MCP behavior.
+- [x] Deploy and validate service health, database integrity, and live MCP behavior
+  (one corrective deployment explicitly authorized after backup validation failed).
 
 Schema remains v5; no stored-record conversion is needed. Summary completeness
 now propagates unknown component nutrients, and null patches reject required fields.
@@ -425,5 +426,16 @@ one explicitly owned connection for the server lifetime, preserving sidecars
 without holding a transaction. All 116 local tests, Ruff, formatting, and mypy
 pass, including backup of committed WAL data from a read-only directory and
 connection cleanup on shutdown. All x86_64-linux Nix flake checks also pass.
-Corrective activation and final backup/integrity
-validation remain pending; no second deployment has been initiated.
+Corrective deployment was explicitly authorized and completed: application
+`f623a38`, deployment pin `4f83b31`, workflow `36548756057`. Application CI and
+the complete production system build passed. The expected package is running
+with zero restarts; the tunnel and backup timer are active. The production
+backup service succeeds, and its snapshot passes full SQLite integrity and
+foreign-key checks. All original records are preserved; concurrent meal
+creation and normal retry-cache expiry account for changes since the baseline.
+Comparing both implementations on the same current snapshot preserves entries,
+training, inventory, nutrient totals, and energy balances, with only the intended
+completeness corrections. Live checks pass for health, all 28 tools and unchanged
+input schemas, policy, goals, inventory, errors, portions, and offline USDA.
+No schema conversion was required. Private verification artifacts remain outside
+Git.
