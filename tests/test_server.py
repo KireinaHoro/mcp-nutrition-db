@@ -83,6 +83,26 @@ def test_schema_exposes_relative_day_and_component_provenance(
     assert "exceptional_activity" in plan_schema["required"]
 
 
+def test_component_schemas_expose_concrete_object_choices(repository):
+    tools = {tool.name: tool for tool in create_server(repository)._tool_manager.list_tools()}
+    for name, expected in (
+        ("nutrition_log_entry", {"ComponentInput", "InventoryComponentInput"}),
+        (
+            "nutrition_update_entry",
+            {"ComponentInput", "InventoryComponentInput", "RetainComponentInput"},
+        ),
+    ):
+        schema = tools[name].parameters
+        if name == "nutrition_log_entry":
+            items = schema["properties"]["components"]["items"]
+        else:
+            components = schema["$defs"]["EntryChanges"]["properties"]["components"]
+            items = next(branch for branch in components["anyOf"] if "items" in branch)["items"]
+        refs = {choice["$ref"].removeprefix("#/$defs/") for choice in items["anyOf"]}
+        assert refs == expected
+        assert all(schema["$defs"][ref]["type"] == "object" for ref in refs)
+
+
 def test_streamable_http_initializes_and_calls_policy(
     repository: NutritionRepository,
 ) -> None:

@@ -149,8 +149,10 @@ class RetainComponentInput(StrictModel):
     existing_component_id: str = Field(min_length=1)
 
 
-type MealComponentInput = ComponentInput | InventoryComponentInput
-type UpdatedComponentInput = MealComponentInput | RetainComponentInput
+# Keep component alternatives inline in JSON Schema: MCP clients need concrete
+# object choices rather than references to named unions of other named unions.
+MealComponentInput = ComponentInput | InventoryComponentInput
+UpdatedComponentInput = MealComponentInput | RetainComponentInput
 
 
 def validate_timezone(value: str) -> str:

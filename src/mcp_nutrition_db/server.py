@@ -154,7 +154,10 @@ def create_server(
         description=(
             "Correct an existing entry after learning new portion, ingredient, timing, or "
             "provenance information. Supply the last observed revision; components replace the "
-            "complete component list when provided."
+            "complete component list when provided. Each component is either inline "
+            "{name, source, nutrition, optional quantity and unit}, an inventory reference "
+            "{food_id, food_revision, amount}, or {existing_component_id} to retain an "
+            "unchanged component. Fetch the entry first for current IDs and revision."
         ),
         annotations=MUTATING,
     )

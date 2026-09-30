@@ -99,6 +99,33 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert logged.structuredContent is not None
             assert logged.structuredContent["totals"]["calories_kcal"] == 130
 
+            entry = logged.structuredContent
+            corrected = await session.call_tool(
+                "nutrition_update_entry",
+                {
+                    "entry_id": entry["entry_id"],
+                    "expected_revision": entry["revision"],
+                    "reason": "Correct portion and retain original component",
+                    "changes": {
+                        "components": [
+                            {"existing_component_id": entry["components"][0]["component_id"]},
+                            {
+                                "name": "Additional yogurt",
+                                "source": {"type": "user_provided"},
+                                "nutrition": {"calories_kcal": 65},
+                            },
+                        ],
+                    },
+                },
+            )
+            assert corrected.isError is False
+            assert corrected.structuredContent["revision"] == entry["revision"] + 1
+            assert corrected.structuredContent["totals"]["calories_kcal"] == 195
+            fetched = await session.call_tool(
+                "nutrition_get_entry", {"entry_id": entry["entry_id"]}
+            )
+            assert fetched.structuredContent["totals"]["calories_kcal"] == 195
+
             listed = await session.call_tool(
                 "nutrition_list_entries",
                 {
