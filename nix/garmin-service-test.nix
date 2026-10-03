@@ -28,7 +28,7 @@ pkgs.testers.runNixOSTest {
     systemd.timers.mcp-nutrition-db-garmin-weekly.wantedBy = lib.mkForce [];
   };
   testScript = ''
-    start_all()
+    machine.start(allow_reboot=True)
     machine.wait_for_unit("mcp-nutrition-db.service")
     machine.succeed("install -m 0600 /dev/null /run/synthetic-garmin-session")
     machine.succeed("systemctl start mcp-nutrition-db-garmin.service")

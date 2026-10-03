@@ -158,6 +158,7 @@ def resume(state: Path, metadata: dict[str, Any]) -> Any:
         raise ValueError("token file must be private and not a symlink")
     try:
         api = client()
+
         # Resolve the trusted systemd StateDirectory parent after checking the
         # token itself. Loading a path enables the client's save-on-refresh hook.
         # Use our fsynced writer for every rotation, including during login.
