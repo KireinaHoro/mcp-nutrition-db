@@ -36,6 +36,12 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("mcp-nutrition-db.service")
     machine.succeed("systemctl start mcp-nutrition-db-garmin.service")
     machine.succeed("test -f /var/lib/mcp-nutrition-db/garmin/probe-token")
+    machine.reboot()
+    machine.wait_for_unit("mcp-nutrition-db.service")
+    machine.succeed("test -f /var/lib/mcp-nutrition-db/garmin/probe-token")
+    machine.fail("test -f /run/synthetic-garmin-session")
+    machine.succeed("install -m 0600 /dev/null /run/synthetic-garmin-session")
+    machine.succeed("systemctl start mcp-nutrition-db-garmin.service")
     machine.succeed("curl --fail http://127.0.0.1:8787/healthz")
     machine.succeed("systemctl show mcp-nutrition-db-garmin.service -p User --value | grep -x mcp-nutrition-db")
   '';

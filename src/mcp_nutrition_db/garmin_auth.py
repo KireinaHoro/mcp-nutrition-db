@@ -12,10 +12,11 @@ import os
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from .serialization import canonical_json, new_id, parse_timestamp, utc_now
+from .serialization import canonical_json, new_id, parse_timestamp, timestamp, utc_now
 
 CLIENT_VERSION = "0.3.16"
 
@@ -34,6 +35,11 @@ def private_write(path: Path, payload: str, *, replace: bool = True) -> None:
             os.replace(temporary, path)
         else:
             os.link(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -132,34 +138,51 @@ def seed_session(state: Path, credential: Path | None) -> dict[str, Any]:
     return metadata
 
 
+def record_auth_failure(state: Path, metadata: dict[str, Any]) -> None:
+    failures = int(metadata.get("auth_failures", 0)) + 1
+    metadata["auth_failures"] = failures
+    metadata["auth_state"] = "reauth_required" if failures >= 3 else "ready"
+    metadata["next_attempt_at"] = timestamp(
+        utc_now() + timedelta(minutes=min(30 * 2 ** min(failures - 1, 4), 360))
+    )
+    private_write(state / "account.json", canonical_json(metadata))
+
+
 def resume(state: Path, metadata: dict[str, Any]) -> Any:
-    if metadata.get("auth_state") == "reauth_required":
-        raise ValueError("reauth_required: provide a new login session")
+    if metadata.get("account_mismatch"):
+        raise ValueError("account mismatch: provide a new login session")
     if metadata.get("next_attempt_at") and utc_now() < parse_timestamp(metadata["next_attempt_at"]):
-        raise ValueError("rate limit backoff active")
+        raise ValueError("Garmin retry backoff active")
     path = state / "tokens.json"
     if path.is_symlink() or stat.S_IMODE(path.stat().st_mode) & 0o077:
         raise ValueError("token file must be private and not a symlink")
     try:
         api = client()
-        # systemd DynamicUser state has a trusted symlink in its ancestry.
-        # Read the checked private file ourselves; the client rejects such paths.
-        api.login(path.read_text())
+        # Resolve the trusted systemd StateDirectory parent after checking the
+        # token itself. Loading a path enables the client's save-on-refresh hook.
+        # Use our fsynced writer for every rotation, including during login.
+        def persist_tokens(_path: str) -> None:
+            private_write(path, api.client.dumps())
+
+        api.client.dump = persist_tokens
+        api.login(str(path.resolve()))
         if account_id(api) != metadata["account_id"]:
             raise ValueError("account mismatch")
         private_write(path, api.client.dumps())
+        metadata["auth_state"] = "ready"
+        metadata.pop("next_attempt_at", None)
+        private_write(state / "account.json", canonical_json(metadata))
         return api
     except Exception as error:
         if "TooManyRequests" in type(error).__name__:
-            from datetime import timedelta
-
-            from .serialization import timestamp
-
             metadata["next_attempt_at"] = timestamp(utc_now() + timedelta(hours=1))
             private_write(state / "account.json", canonical_json(metadata))
-        if "Authentication" in type(error).__name__ or str(error) == "account mismatch":
+        if str(error) == "account mismatch":
+            metadata["account_mismatch"] = True
             metadata["auth_state"] = "reauth_required"
             private_write(state / "account.json", canonical_json(metadata))
+        elif "Authentication" in type(error).__name__:
+            record_auth_failure(state, metadata)
         raise ValueError("Garmin session unavailable; inspect sync status or renew login") from None
 
 

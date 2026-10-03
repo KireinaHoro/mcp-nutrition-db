@@ -12,7 +12,14 @@ from typing import Any
 from .backup import backup_database
 from .body import BodyRepository
 from .garmin import GarminAdapter
-from .garmin_auth import login, private_write, resume, seed_session, session_lock
+from .garmin_auth import (
+    login,
+    private_write,
+    record_auth_failure,
+    resume,
+    seed_session,
+    session_lock,
+)
 from .garmin_import import GarminImporter
 from .garmin_reconcile import apply, prepare
 from .repository import NutritionRepository
@@ -208,13 +215,17 @@ def run(args: argparse.Namespace) -> int:
                     print(f"Private reconciliation report written to {args.output}")
             elif args.garmin_command == "activate":
                 print(canonical_json(importer.activate()))
+            if api is not None:
+                metadata.pop("auth_failures", None)
+                metadata.pop("next_attempt_at", None)
+                metadata["auth_state"] = "ready"
+                private_write(state / "account.json", canonical_json(metadata))
         except Exception as error:
             # Do not persist provider messages, URLs, account data, or response bodies.
             if args.garmin_command in ("sync", "validate") and not getattr(args, "dry_run", False):
                 current = json.loads((state / "account.json").read_text())
                 if "Authentication" in type(error).__name__:
-                    current["auth_state"] = "reauth_required"
-                    private_write(state / "account.json", canonical_json(current))
+                    record_auth_failure(state, current)
                 if "TooManyRequests" in type(error).__name__:
                     from datetime import timedelta
 

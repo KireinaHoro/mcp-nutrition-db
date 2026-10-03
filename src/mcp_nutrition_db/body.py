@@ -59,7 +59,8 @@ class BodyRepository:
                 "eligible": disconnected or stalled,
                 "state": "reauth_required" if disconnected else "sync_stale" if stalled else "ok",
                 "message": (
-                    "Garmin is disconnected. Generate a new login session and replace the sops "
+                    "Garmin authentication needs attention; automatic retries continue. "
+                    "If it persists, generate a new login session and replace the sops "
                     "secret."
                     if disconnected
                     else "Garmin sync is delayed; weight and activity data may be incomplete."

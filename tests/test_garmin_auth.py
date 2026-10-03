@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import UTC
 
 import pytest
 
@@ -90,14 +91,39 @@ def test_login_resume_mfa_and_no_secret_output(tmp_path, monkeypatch, capsys):
     assert "synthetic" not in capsys.readouterr().out
 
 
-def test_reauth_stops_unattended_attempts(tmp_path, monkeypatch):
+def test_auth_retry_backoff_and_cap(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
     state = tmp_path / "state"
     state.mkdir()
     garmin_auth.private_write(state / "tokens.json", "{}")
+    now = datetime(2026, 10, 4, tzinfo=UTC)
+    monkeypatch.setattr(garmin_auth, "utc_now", lambda: now)
     metadata = {"account_id": "123", "auth_state": "reauth_required"}
-    monkeypatch.setattr(garmin_auth, "client", lambda: pytest.fail("must not retry auth"))
-    with pytest.raises(ValueError, match="reauth_required"):
-        garmin_auth.resume(state, metadata)
+
+    class GarminConnectAuthenticationError(Exception):
+        pass
+
+    class API:
+        @property
+        def client(self):
+            return self
+
+        def login(self, path):
+            raise GarminConnectAuthenticationError("private provider response")
+
+    monkeypatch.setattr(garmin_auth, "client", API)
+    for minutes in [30, 60, 120, 240, 360, 360]:
+        with pytest.raises(ValueError, match="session unavailable"):
+            garmin_auth.resume(state, metadata)
+        assert garmin_auth.parse_timestamp(metadata["next_attempt_at"]) == (
+            now + timedelta(minutes=minutes)
+        )
+        with pytest.raises(ValueError, match="backoff"):
+            garmin_auth.resume(state, metadata)
+        now += timedelta(minutes=minutes)
+    assert metadata["auth_state"] == "reauth_required"
+    assert "private provider response" not in (state / "account.json").read_text()
 
 
 def test_resume_through_systemd_state_parent(tmp_path, monkeypatch):
@@ -114,7 +140,9 @@ def test_resume_through_systemd_state_parent(tmp_path, monkeypatch):
         profile_id = 123
 
         def login(self, value):
-            assert json.loads(value) == {"di_token": "synthetic-old"}
+            assert json.loads(__import__("pathlib").Path(value).read_text()) == {
+                "di_token": "synthetic-old"
+            }
 
         @property
         def client(self):
@@ -176,3 +204,89 @@ def test_sync_persists_tokens_refreshed_during_fetch(tmp_path, monkeypatch, fail
     else:
         assert garmin_cli.run(args) == 0
     assert json.loads((state / "tokens.json").read_text())["di_token"] == "after-refresh"
+
+
+def test_rotation_saved_even_when_resume_fails(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    state.mkdir()
+    garmin_auth.private_write(state / "tokens.json", '{"di_token":"old"}')
+
+    class API:
+        @property
+        def client(self):
+            return self
+
+        def dumps(self):
+            return '{"di_token":"rotated","di_refresh_token":"rotated-refresh"}'
+
+        def login(self, path):
+            self.dump(path)
+            raise ValueError("profile request failed after rotation")
+
+    monkeypatch.setattr(garmin_auth, "client", API)
+    with pytest.raises(ValueError, match="session unavailable"):
+        garmin_auth.resume(state, {"account_id": "123"})
+    assert json.loads((state / "tokens.json").read_text())["di_refresh_token"] == (
+        "rotated-refresh"
+    )
+
+
+def test_library_refresh_persists_before_failed_profile_request(tmp_path, monkeypatch):
+    from garminconnect import Garmin
+
+    state = tmp_path / "state"
+    state.mkdir()
+    garmin_auth.private_write(
+        state / "tokens.json",
+        '{"di_token":"old","di_refresh_token":"old-refresh","di_client_id":"synthetic"}',
+    )
+    api = Garmin()
+
+    def rotate():
+        api.client.di_token = "new"
+        api.client.di_refresh_token = "new-refresh"
+
+    def login(path):
+        api.client.load(path)
+        api.client._refresh_session()
+        raise ValueError("profile fetch failed")
+
+    monkeypatch.setattr(api.client, "_refresh_di_token", rotate)
+    monkeypatch.setattr(api, "login", login)
+    monkeypatch.setattr(garmin_auth, "client", lambda: api)
+    with pytest.raises(ValueError, match="session unavailable"):
+        garmin_auth.resume(state, {"account_id": "123"})
+    assert json.loads((state / "tokens.json").read_text())["di_refresh_token"] == "new-refresh"
+
+
+def test_saved_session_recovers_from_reauth_and_account_mismatch_stays_blocked(
+    tmp_path, monkeypatch
+):
+    state = tmp_path / "state"
+    state.mkdir()
+    garmin_auth.private_write(state / "tokens.json", '{"di_token":"old"}')
+
+    class API:
+        profile_id = 123
+
+        @property
+        def client(self):
+            return self
+
+        def dumps(self):
+            return '{"di_token":"new"}'
+
+        def login(self, path):
+            pass
+
+    monkeypatch.setattr(garmin_auth, "client", API)
+    metadata = {"account_id": "123", "auth_state": "reauth_required"}
+    garmin_auth.resume(state, metadata)
+    assert metadata["auth_state"] == "ready"
+    metadata["account_id"] = "456"
+    with pytest.raises(ValueError, match="session unavailable"):
+        garmin_auth.resume(state, metadata)
+    assert metadata["account_mismatch"] is True
+    monkeypatch.setattr(garmin_auth, "client", lambda: pytest.fail("wrong account"))
+    with pytest.raises(ValueError, match="account mismatch"):
+        garmin_auth.resume(state, metadata)

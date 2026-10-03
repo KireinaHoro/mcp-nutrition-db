@@ -38,7 +38,9 @@ the runtime secret to the shared `mcp-nutrition-db` service identity.
 A new `session_id` seeds private writable state once. Subsequent starts retain the
 refreshed token file. Replacing the encrypted secret with a new login bundle renews
 a disconnected session; a redeployment of the same bundle does not roll tokens
-back. Account changes require separate runtime state and a separate database.
+back. Refreshed tokens live in `/var/lib/mcp-nutrition-db/garmin/tokens.json`,
+not the ephemeral `/run` credential directory, and are atomically saved and fsynced
+on each rotation, including during session resume. Account changes require separate runtime state and a separate database.
 Another machine may need a new login if the original seed is no longer usable.
 
 Garmin client `0.3.16` and its direct dependencies are pinned in Python packaging;
@@ -117,8 +119,9 @@ the client bounds request timeouts and retries transient failures. Rate-limited
 runs back off; no raw provider exception or response body enters persisted errors.
 
 `status` and `nutrition_get_sync_status` expose separate stream freshness, coverage,
-pending counts and redacted failures. Authentication failure persists
-`reauth_required` and stops unattended login attempts. Nutrition summaries and goal
+pending counts and redacted failures. Authentication failures retry with exponential backoff from 30 minutes to six hours.
+After three failures, status reports `reauth_required` while retries continue.
+An account mismatch blocks retries until a new session is supplied. Nutrition summaries and goal
 responses include `garmin_connection`; weight responses include the sync hint.
 ChatGPT must surface disconnected or delayed syncing during nutrition conversations,
 with instructions to run the private login app and renew the sops secret when needed.
