@@ -43,9 +43,12 @@ not the ephemeral `/run` credential directory, and are atomically saved and fsyn
 on each rotation, including during session resume. Account changes require separate runtime state and a separate database.
 Another machine may need a new login if the original seed is no longer usable.
 
-Garmin client `0.3.16` and its direct dependencies are pinned in Python packaging;
-Nix uses the native package and dependencies from the locked nixpkgs input. This is a candidate
-mapping until validated against the account. Source:
+Python packaging accepts Garmin client versions `>=0.3.16,<0.4` and lets the
+client declare its own dependencies. The flake lock pins the exact Nix dependency
+set, and the package build runs the test suite. Session bundles record the client
+version for provenance; compatibility is checked by bundle format and successful
+session resume, rather than exact client-version equality. Live account validation
+is still required for authentication and data mapping. Source:
 [python-garminconnect](https://github.com/cyberjunky/python-garminconnect).
 
 ## Onboarding and reconciliation

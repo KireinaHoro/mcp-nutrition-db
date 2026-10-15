@@ -10,7 +10,7 @@ from mcp_nutrition_db import garmin_auth
 def bundle(session="first", account="123", token="synthetic-seed"):
     return {
         "format": 1,
-        "client_version": garmin_auth.CLIENT_VERSION,
+        "client_version": "0.3.16",
         "account_id": account,
         "session_id": session,
         "tokens": {"di_token": token},
@@ -290,3 +290,30 @@ def test_saved_session_recovers_from_reauth_and_account_mismatch_stays_blocked(
     monkeypatch.setattr(garmin_auth, "client", lambda: pytest.fail("wrong account"))
     with pytest.raises(ValueError, match="account mismatch"):
         garmin_auth.resume(state, metadata)
+
+
+def test_client_uses_installed_library():
+    from garminconnect import Garmin
+
+    assert isinstance(garmin_auth.client(), Garmin)
+
+
+@pytest.mark.parametrize("client_version", ["0.3.16", "0.3.17"])
+def test_session_bundle_client_version_is_provenance(tmp_path, client_version):
+    secret = tmp_path / "secret.json"
+    payload = bundle()
+    payload["client_version"] = client_version
+    secret.write_text(json.dumps(payload))
+    state = tmp_path / "state"
+    metadata = garmin_auth.seed_session(state, secret)
+    assert metadata["client_version"] == client_version
+    assert json.loads((state / "tokens.json").read_text()) == payload["tokens"]
+
+
+def test_session_bundle_rejects_unknown_format(tmp_path):
+    secret = tmp_path / "secret.json"
+    payload = bundle()
+    payload["format"] = 2
+    secret.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="unsupported session bundle"):
+        garmin_auth.seed_session(tmp_path / "state", secret)

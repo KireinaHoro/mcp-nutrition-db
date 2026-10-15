@@ -13,12 +13,11 @@ import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 from .serialization import canonical_json, new_id, parse_timestamp, timestamp, utc_now
-
-CLIENT_VERSION = "0.3.16"
 
 
 def private_write(path: Path, payload: str, *, replace: bool = True) -> None:
@@ -60,10 +59,6 @@ def session_lock(state: Path) -> Iterator[None]:
 
 
 def client(**kwargs: Any) -> Any:
-    from importlib.metadata import version
-
-    if version("garminconnect") != CLIENT_VERSION:
-        raise ValueError("unsupported Garmin client version")
     # Third-party authentication diagnostics can include private response bodies.
     logging.getLogger("garminconnect").disabled = True
     logging.getLogger("garminconnect.client").disabled = True
@@ -101,7 +96,7 @@ def login(output: Path) -> None:
         raise ValueError("saved-session account mismatch")
     bundle = {
         "format": 1,
-        "client_version": CLIENT_VERSION,
+        "client_version": version("garminconnect"),
         "account_id": identity,
         "session_id": new_id(),
         "tokens": json.loads(resumed.client.dumps()),
@@ -119,7 +114,7 @@ def seed_session(state: Path, credential: Path | None) -> dict[str, Any]:
     )
     if credential is not None:
         bundle = json.loads(credential.read_text())
-        if bundle.get("format") != 1 or bundle.get("client_version") != CLIENT_VERSION:
+        if bundle.get("format") != 1:
             raise ValueError("unsupported session bundle")
         if not bundle.get("account_id") or not bundle.get("session_id"):
             raise ValueError("incomplete session bundle")
