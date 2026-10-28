@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from .body import BodyRepository
 from .repository import NutritionRepository
@@ -33,7 +33,9 @@ passwords, MFA codes or tokens in chat. Do not send outbound messages for either
 """
 
 
-def register_weight_tools(server: FastMCP, repository: NutritionRepository, timezone: str) -> None:
+def register_weight_tools(
+    server: MCPServer, repository: NutritionRepository, timezone: str
+) -> None:
     body = BodyRepository(repository.database)
     reviews = WeightReviewRepository(repository)
 

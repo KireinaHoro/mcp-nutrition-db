@@ -470,7 +470,7 @@ def test_garmin_details_enrich_existing_trainings_without_accounting_changes(
 
     from mcp_nutrition_db.server import create_server
 
-    app = create_server(repository).streamable_http_app()
+    app = create_server(repository).streamable_http_app(stateless_http=True, json_response=True)
 
     async def fetch_tool():
         async with (

@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from mcp.server.fastmcp import Context
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import ValidationError
 
@@ -15,26 +15,25 @@ from .models import QueryWindow
 from .observability import RequestContext, logged_tool_call
 from .serialization import canonical_json
 
-# The SDK detects only the unparameterized runtime class for context injection.
 MCPContext = Context
 
 READ_ONLY = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 MUTATING = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=False,
-    idempotentHint=False,
-    openWorldHint=False,
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=False,
 )
 DESTRUCTIVE = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=False,
-    openWorldHint=False,
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=False,
+    open_world_hint=False,
 )
 
 

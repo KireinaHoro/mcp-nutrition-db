@@ -11,8 +11,8 @@ requires-python = ">=3.13"
 license = "MIT"
 authors = [{ name = "KireinaHoro" }]
 dependencies = [
-  "mcp>=1.29,<2",
-  "pydantic>=2.11,<3",
+  "mcp>=2.2,<3",
+  "pydantic>=2.12,<3",
   "garminconnect>=0.3.16,<0.4",
 ]
 

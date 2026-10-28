@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, ParamSpec
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from .inventory_models import FoodDefinition, FoodLink
@@ -45,7 +45,7 @@ then apply_food_links. These links preserve original nutrition/provenance; they 
 
 
 def register_inventory_tools(
-    server: FastMCP, repository: NutritionRepository, default_timezone: str
+    server: MCPServer, repository: NutritionRepository, default_timezone: str
 ) -> None:
     inventory = repository.inventory
     usda = USDAClient(repository.database)
@@ -68,7 +68,7 @@ def register_inventory_tools(
         ),
     )
     def nutrition_inventory_status(
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         return invoke("nutrition_inventory_status", ctx, inventory.status)
 
@@ -82,7 +82,7 @@ def register_inventory_tools(
         ),
     )
     def nutrition_search_foods(
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         query: str | None = None,
         status: Literal["active", "archived", "all"] = "active",
         cursor: str | None = None,
@@ -100,7 +100,7 @@ def register_inventory_tools(
     )
     def nutrition_get_food(
         food_id: str,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         revision: Annotated[int | None, Field(ge=1)] = None,
     ) -> dict[str, Any]:
         return invoke("nutrition_get_food", ctx, inventory.get_food, food_id, revision)
@@ -116,7 +116,7 @@ def register_inventory_tools(
     )
     def nutrition_create_food(
         food: FoodDefinition,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         return invoke("nutrition_create_food", ctx, inventory.create_food, food)
 
@@ -133,7 +133,7 @@ def register_inventory_tools(
         expected_revision: Annotated[int, Field(ge=1)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
         changes: dict[str, Any],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         return invoke(
             "nutrition_update_food",
@@ -156,7 +156,7 @@ def register_inventory_tools(
         food_id: str,
         expected_revision: Annotated[int, Field(ge=1)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         return invoke(
             "nutrition_archive_food",
@@ -180,7 +180,7 @@ def register_inventory_tools(
         food_id: str,
         food_revision: Annotated[int, Field(ge=1)],
         amount: FoodAmount,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         portion_estimation: Estimation | None = None,
     ) -> dict[str, Any]:
         return invoke(
@@ -203,7 +203,7 @@ def register_inventory_tools(
     )
     def nutrition_find_food_matches(
         window: QueryWindow,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         food_id: str | None = None,
         query: str | None = None,
         cursor: str | None = None,
@@ -233,7 +233,7 @@ def register_inventory_tools(
     )
     def nutrition_preview_food_links(
         links: Annotated[list[FoodLink], Field(min_length=1, max_length=100)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         return invoke("nutrition_preview_food_links", ctx, inventory.preview_food_links, links)
 
@@ -248,7 +248,7 @@ def register_inventory_tools(
     def nutrition_apply_food_links(
         plan_id: str,
         reason: Annotated[str, Field(min_length=1, max_length=500)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         return invoke(
             "nutrition_apply_food_links", ctx, inventory.apply_food_links, plan_id, reason
@@ -264,7 +264,7 @@ def register_inventory_tools(
     )
     def nutrition_search_usda_foods(
         query: Annotated[str, Field(min_length=1, max_length=300)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         data_types: list[Literal["Foundation", "SR Legacy", "Survey (FNDDS)", "Branded"]]
         | None = None,
         page: Annotated[int, Field(ge=1, le=1000)] = 1,
@@ -285,6 +285,6 @@ def register_inventory_tools(
     )
     def nutrition_get_usda_food(
         fdc_id: Annotated[int, Field(gt=0)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         return invoke("nutrition_get_usda_food", ctx, usda.get_food, fdc_id)

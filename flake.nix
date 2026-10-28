@@ -26,7 +26,9 @@
           pytestFlags = [ "tests" ];
           pythonImportsCheck = [ "mcp_nutrition_db" ];
           makeWrapperArgs = [
-            "--set-default MCP_NUTRITION_USDA_DATABASE ${usdaDatabaseFor system}/share/mcp-nutrition-db/usda.sqlite3"
+            "--set-default"
+            "MCP_NUTRITION_USDA_DATABASE"
+            "${usdaDatabaseFor system}/share/mcp-nutrition-db/usda.sqlite3"
           ];
 
           meta = {

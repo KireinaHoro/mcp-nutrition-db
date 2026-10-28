@@ -4,7 +4,7 @@ import json
 import logging
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_nutrition_db.errors import InventoryError, RevisionConflictError
 from mcp_nutrition_db.models import EntryChanges

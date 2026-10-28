@@ -51,15 +51,15 @@ def test_server_advertises_inventory_tools_with_safe_annotations(
         "nutrition_search_usda_foods",
         "nutrition_get_usda_food",
     }
-    assert tools["nutrition_search_usda_foods"].annotations.openWorldHint is False
-    assert tools["nutrition_get_usda_food"].annotations.openWorldHint is False
-    assert tools["nutrition_get_entry"].annotations.readOnlyHint is True
-    assert tools["nutrition_list_entries"].annotations.readOnlyHint is True
-    assert tools["nutrition_delete_entry"].annotations.destructiveHint is True
-    assert tools["nutrition_log_entry"].annotations.idempotentHint is False
-    assert tools["nutrition_list_trainings"].annotations.readOnlyHint is True
-    assert tools["nutrition_delete_training"].annotations.destructiveHint is True
-    assert tools["nutrition_get_energy_policy"].annotations.readOnlyHint is True
+    assert tools["nutrition_search_usda_foods"].annotations.open_world_hint is False
+    assert tools["nutrition_get_usda_food"].annotations.open_world_hint is False
+    assert tools["nutrition_get_entry"].annotations.read_only_hint is True
+    assert tools["nutrition_list_entries"].annotations.read_only_hint is True
+    assert tools["nutrition_delete_entry"].annotations.destructive_hint is True
+    assert tools["nutrition_log_entry"].annotations.idempotent_hint is False
+    assert tools["nutrition_list_trainings"].annotations.read_only_hint is True
+    assert tools["nutrition_delete_training"].annotations.destructive_hint is True
+    assert tools["nutrition_get_energy_policy"].annotations.read_only_hint is True
 
 
 def test_schema_exposes_relative_day_and_component_provenance(
@@ -107,7 +107,7 @@ def test_streamable_http_initializes_and_calls_policy(
     repository: NutritionRepository,
 ) -> None:
     server = create_server(repository)
-    app = server.streamable_http_app()
+    app = server.streamable_http_app(stateless_http=True, json_response=True)
 
     async def exercise() -> None:
         transport = httpx.ASGITransport(app=app)
@@ -166,7 +166,7 @@ def test_streamable_http_initializes_and_calls_policy(
 def test_http_lifecycle_partial_summary_and_revision_errors(repository, meal_payload):
     import json
 
-    app = create_server(repository).streamable_http_app()
+    app = create_server(repository).streamable_http_app(stateless_http=True, json_response=True)
 
     async def exercise():
         async with (

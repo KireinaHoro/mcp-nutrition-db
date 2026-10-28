@@ -1,11 +1,11 @@
-"""FastMCP tool surface for the nutrition repository."""
+"""MCPServer tool surface for the nutrition repository."""
 
 from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -75,20 +75,13 @@ Nutrition and exercise estimates are not medical advice."""
 def create_server(
     repository: NutritionRepository,
     *,
-    host: str = "127.0.0.1",
-    port: int = 8787,
     default_timezone: str = DEFAULT_TIMEZONE,
-) -> FastMCP:
+) -> MCPServer:
 
     validate_timezone(default_timezone)
-    server = FastMCP(
+    server = MCPServer(
         "mcp-nutrition-db",
         instructions=INSTRUCTIONS + INVENTORY_INSTRUCTIONS + WEIGHT_INSTRUCTIONS,
-        host=host,
-        port=port,
-        streamable_http_path="/mcp",
-        stateless_http=True,
-        json_response=True,
     )
 
     @server.custom_route(  # type: ignore[untyped-decorator]
@@ -115,7 +108,7 @@ def create_server(
         kind: EntryKind,
         title: Annotated[str, Field(min_length=1, max_length=300)],
         components: Annotated[list[MealComponentInput], Field(min_length=1, max_length=100)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         timezone: str = default_timezone,
         notes: Annotated[str | None, Field(max_length=5_000)] = None,
         estimation: Estimation | None = None,
@@ -144,7 +137,7 @@ def create_server(
     )
     def nutrition_get_entry(
         entry_id: str,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         with tool_call("nutrition_get_entry", ctx):
             return repository.get_entry(entry_id)
@@ -166,7 +159,7 @@ def create_server(
         expected_revision: Annotated[int, Field(ge=1)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
         changes: EntryChanges,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         with tool_call("nutrition_update_entry", ctx):
             return repository.update_entry(entry_id, expected_revision, reason, changes)
@@ -180,7 +173,7 @@ def create_server(
         entry_id: str,
         expected_revision: Annotated[int, Field(ge=1)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         with tool_call("nutrition_delete_entry", ctx):
             return repository.delete_entry(entry_id, expected_revision, reason)
@@ -195,7 +188,7 @@ def create_server(
     )
     def nutrition_list_entries(
         window: QueryWindow,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         kind: EntryKind | None = None,
         cursor: str | None = None,
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
@@ -229,7 +222,7 @@ def create_server(
         confidence: Confidence,
         measurement_method: TrainingMeasurementMethod,
         source: TrainingSource,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         evidence: TrainingEvidence | None = None,
         timezone: str = default_timezone,
         notes: Annotated[str | None, Field(max_length=5_000)] = None,
@@ -266,7 +259,7 @@ def create_server(
     )
     def nutrition_get_training(
         training_id: str,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         with tool_call("nutrition_get_training", ctx):
             return repository.get_training(training_id)
@@ -285,7 +278,7 @@ def create_server(
         expected_revision: Annotated[int, Field(ge=1)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
         changes: TrainingChanges,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         with tool_call("nutrition_update_training", ctx):
             return repository.update_training(training_id, expected_revision, reason, changes)
@@ -299,7 +292,7 @@ def create_server(
         training_id: str,
         expected_revision: Annotated[int, Field(ge=1)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
     ) -> dict[str, Any]:
         with tool_call("nutrition_delete_training", ctx):
             return repository.delete_training(training_id, expected_revision, reason)
@@ -316,7 +309,7 @@ def create_server(
     )
     def nutrition_list_trainings(
         window: QueryWindow,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         cursor: str | None = None,
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
     ) -> dict[str, Any]:
@@ -344,7 +337,7 @@ def create_server(
     )
     def nutrition_summarize(
         window: QueryWindow,
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         grouping: Literal["day", "whole_range"] = "whole_range",
     ) -> dict[str, Any]:
         with tool_call("nutrition_summarize", ctx):
@@ -369,7 +362,7 @@ def create_server(
         effective_from: date,
         base_burn_kcal: Annotated[float, Field(gt=0, le=100_000)],
         reason: Annotated[str, Field(min_length=1, max_length=500)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         deficit_kcal: Annotated[float, Field(ge=0, le=100_000)] = 0,
         targets: NutritionValues | None = None,
         timezone: str = default_timezone,
@@ -396,7 +389,7 @@ def create_server(
         annotations=READ_ONLY,
     )
     def nutrition_get_goals(
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         on_date: date | None = None,
         timezone: str = default_timezone,
         include_history: bool = True,
@@ -415,7 +408,7 @@ def create_server(
         ),
         annotations=READ_ONLY,
     )
-    def nutrition_get_energy_policy(ctx: MCPContext) -> dict[str, Any]:  # type: ignore[type-arg]
+    def nutrition_get_energy_policy(ctx: MCPContext) -> dict[str, Any]:
         with tool_call("nutrition_get_energy_policy", ctx):
             return repository.energy_policy()
 
@@ -428,7 +421,7 @@ def create_server(
         annotations=READ_ONLY,
     )
     def nutrition_get_activity_plan(
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         on_date: date | None = None,
         timezone: str = default_timezone,
     ) -> dict[str, Any]:
@@ -448,7 +441,7 @@ def create_server(
         on_date: date,
         exceptional_activity: bool,
         reason: Annotated[str, Field(min_length=1, max_length=500)],
-        ctx: MCPContext,  # type: ignore[type-arg]
+        ctx: MCPContext,
         timezone: str = default_timezone,
         expected_revision: Annotated[int, Field(ge=0)] = 0,
     ) -> dict[str, Any]:

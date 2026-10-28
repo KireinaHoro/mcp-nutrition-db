@@ -35,3 +35,35 @@ def test_serve_owns_wal_sidecars_until_shutdown(monkeypatch, tmp_path):
     monkeypatch.setattr("mcp_nutrition_db.cli.create_server", lambda *args, **kwargs: Server())
     assert cli.main(["serve", "--transport", "stdio", "--database", str(database)]) == 0
     assert not wal.exists()
+
+
+def test_http_transport_keeps_bind_and_stateless_configuration(monkeypatch, tmp_path):
+    options = {}
+
+    class Server:
+        def run(self, **kwargs):
+            options.update(kwargs)
+
+    monkeypatch.setattr(cli, "create_server", lambda *args, **kwargs: Server())
+    assert (
+        cli.main(
+            [
+                "serve",
+                "--database",
+                str(tmp_path / "nutrition.sqlite3"),
+                "--host",
+                "localhost",
+                "--port",
+                "9876",
+            ]
+        )
+        == 0
+    )
+    assert options == {
+        "transport": "streamable-http",
+        "host": "localhost",
+        "port": 9876,
+        "streamable_http_path": "/mcp",
+        "stateless_http": True,
+        "json_response": True,
+    }

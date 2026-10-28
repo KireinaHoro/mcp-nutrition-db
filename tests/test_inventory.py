@@ -411,7 +411,7 @@ def test_historical_source_references_survive_entry_revision(repository, meal):
 
 def test_inventory_mcp_create_log_conflict_and_link(repository, meal):
     server = create_server(repository)
-    app = server.streamable_http_app()
+    app = server.streamable_http_app(stateless_http=True, json_response=True)
 
     async def exercise():
         transport = httpx.ASGITransport(app=app)

@@ -109,15 +109,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     server = create_server(
         repository,
-        host=args.host,
-        port=args.port,
         default_timezone=args.timezone,
     )
     try:
         with repository.database.keep_wal_available():
-            server.run(transport=args.transport)
+            if args.transport == "stdio":
+                server.run(transport="stdio")
+            else:
+                server.run(
+                    transport="streamable-http",
+                    host=args.host,
+                    port=args.port,
+                    streamable_http_path="/mcp",
+                    stateless_http=True,
+                    json_response=True,
+                )
     except KeyboardInterrupt:
-        # FastMCP completes its application shutdown before propagating Ctrl-C.
+        # MCPServer completes its application shutdown before propagating Ctrl-C.
         # Treat that completed operator shutdown as a clean exit.
         return 0
     return 0

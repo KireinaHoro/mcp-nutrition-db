@@ -40,7 +40,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             ClientSession(read_stream, write_stream) as session,
         ):
             initialized = await session.initialize()
-            assert initialized.serverInfo.name == "mcp-nutrition-db"
+            assert initialized.server_info.name == "mcp-nutrition-db"
             assert "durable nutrition record" in (initialized.instructions or "")
 
             tools = await session.list_tools()
@@ -50,16 +50,16 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
             assert "garmin_activity" in descriptions["nutrition_list_trainings"]
 
             status = await session.call_tool("nutrition_get_sync_status", {})
-            assert status.isError is False
-            assert status.structuredContent["connection_hint"]["eligible"] is False
+            assert status.is_error is False
+            assert status.structured_content["connection_hint"]["eligible"] is False
             weight = await session.call_tool("nutrition_get_body_weight", {})
-            assert weight.structuredContent["measurement"] is None
-            assert weight.structuredContent["weight_budget_review"]["weight_stale"] is True
+            assert weight.structured_content["measurement"] is None
+            assert weight.structured_content["weight_budget_review"]["weight_stale"] is True
             review = await session.call_tool("nutrition_get_weight_budget_review", {})
-            assert review.isError is False
-            assert "goals" in review.structuredContent
+            assert review.is_error is False
+            assert "goals" in review.structured_content
             history = await session.call_tool("nutrition_list_body_measurements", {"limit": 1})
-            assert history.structuredContent["measurements"] == []
+            assert history.structured_content["measurements"] == []
             reminder = await session.call_tool(
                 "nutrition_update_weight_budget_review_reminder",
                 {
@@ -67,8 +67,8 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "expected_revision": 0,
                 },
             )
-            assert reminder.isError is False
-            assert reminder.structuredContent["enabled"] is True
+            assert reminder.is_error is False
+            assert reminder.structured_content["enabled"] is True
 
             logged = await session.call_tool(
                 "nutrition_log_entry",
@@ -95,11 +95,11 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     ],
                 },
             )
-            assert logged.isError is False
-            assert logged.structuredContent is not None
-            assert logged.structuredContent["totals"]["calories_kcal"] == 130
+            assert logged.is_error is False
+            assert logged.structured_content is not None
+            assert logged.structured_content["totals"]["calories_kcal"] == 130
 
-            entry = logged.structuredContent
+            entry = logged.structured_content
             corrected = await session.call_tool(
                 "nutrition_update_entry",
                 {
@@ -118,13 +118,13 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     },
                 },
             )
-            assert corrected.isError is False
-            assert corrected.structuredContent["revision"] == entry["revision"] + 1
-            assert corrected.structuredContent["totals"]["calories_kcal"] == 195
+            assert corrected.is_error is False
+            assert corrected.structured_content["revision"] == entry["revision"] + 1
+            assert corrected.structured_content["totals"]["calories_kcal"] == 195
             fetched = await session.call_tool(
                 "nutrition_get_entry", {"entry_id": entry["entry_id"]}
             )
-            assert fetched.structuredContent["totals"]["calories_kcal"] == 195
+            assert fetched.structured_content["totals"]["calories_kcal"] == 195
 
             listed = await session.call_tool(
                 "nutrition_list_entries",
@@ -136,9 +136,9 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     }
                 },
             )
-            assert listed.isError is False
-            assert listed.structuredContent is not None
-            assert len(listed.structuredContent["entries"]) == 1
+            assert listed.is_error is False
+            assert listed.structured_content is not None
+            assert len(listed.structured_content["entries"]) == 1
 
             goal = await session.call_tool(
                 "nutrition_set_goals",
@@ -150,7 +150,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "reason": "Test energy budget",
                 },
             )
-            assert goal.isError is False
+            assert goal.is_error is False
             proposal = await session.call_tool(
                 "nutrition_propose_weight_budget_review",
                 {
@@ -162,8 +162,8 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     }
                 },
             )
-            assert proposal.isError is False
-            proposal_id = proposal.structuredContent["proposal_id"]
+            assert proposal.is_error is False
+            proposal_id = proposal.structured_content["proposal_id"]
             denied = await session.call_tool(
                 "nutrition_complete_weight_budget_review",
                 {
@@ -171,7 +171,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "user_approved": False,
                 },
             )
-            assert denied.isError is True
+            assert denied.is_error is True
             approved = await session.call_tool(
                 "nutrition_complete_weight_budget_review",
                 {
@@ -179,8 +179,8 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "user_approved": True,
                 },
             )
-            assert approved.isError is False
-            assert approved.structuredContent["outcome"] == "keep"
+            assert approved.is_error is False
+            assert approved.structured_content["outcome"] == "keep"
 
             training = await session.call_tool(
                 "nutrition_log_training",
@@ -194,16 +194,16 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "source": {"type": "user_provided", "detail": "Cycling computer"},
                 },
             )
-            assert training.isError is False
-            assert training.structuredContent is not None
-            assert training.structuredContent["calorie_basis"] == "active"
-            assert training.structuredContent["reported_burn_kcal"] == 850
-            assert training.structuredContent["credited_burn_kcal"] == 850
+            assert training.is_error is False
+            assert training.structured_content is not None
+            assert training.structured_content["calorie_basis"] == "active"
+            assert training.structured_content["reported_burn_kcal"] == 850
+            assert training.structured_content["credited_burn_kcal"] == 850
 
             policy = await session.call_tool("nutrition_get_energy_policy", {})
-            assert policy.isError is False
-            assert policy.structuredContent is not None
-            assert policy.structuredContent["policy_id"] == "energy-credit/v7"
+            assert policy.is_error is False
+            assert policy.structured_content is not None
+            assert policy.structured_content["policy_id"] == "energy-credit/v7"
 
             review = await session.call_tool(
                 "nutrition_get_activity_plan",
@@ -211,8 +211,8 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "on_date": "2026-08-27",
                 },
             )
-            assert not review.isError
-            assert review.structuredContent["activity_plan"] is None
+            assert not review.is_error
+            assert review.structured_content["activity_plan"] is None
             reviewed = await session.call_tool(
                 "nutrition_set_activity_plan",
                 {
@@ -221,16 +221,16 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "reason": "Planned exceptional activity",
                 },
             )
-            assert not reviewed.isError
-            assert reviewed.structuredContent["record"]["revision"] == 1
+            assert not reviewed.is_error
+            assert reviewed.structured_content["record"]["revision"] == 1
             review = await session.call_tool(
                 "nutrition_get_activity_plan",
                 {
                     "on_date": "2026-08-27",
                 },
             )
-            assert not review.isError
-            assert review.structuredContent["activity_plan"]["revision"] == 1
+            assert not review.is_error
+            assert review.structured_content["activity_plan"]["revision"] == 1
             conflict = await session.call_tool(
                 "nutrition_set_activity_plan",
                 {
@@ -239,7 +239,7 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     "reason": "Stale revision",
                 },
             )
-            assert conflict.isError
+            assert conflict.is_error
 
             summary = await session.call_tool(
                 "nutrition_summarize",
@@ -251,9 +251,9 @@ def test_stdio_mcp_initialize_list_and_call(tmp_path: Path) -> None:
                     }
                 },
             )
-            assert summary.isError is False
-            assert summary.structuredContent is not None
-            group = summary.structuredContent["groups"][0]
+            assert summary.is_error is False
+            assert summary.structured_content is not None
+            group = summary.structured_content["groups"][0]
             assert group["trainings"][0]["calorie_basis"] == "active"
             assert group["reported_training_burn_kcal"] == 850
             assert group["credited_training_burn_kcal"] == 850
